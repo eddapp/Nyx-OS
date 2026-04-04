@@ -1,6 +1,6 @@
 # 🏗️ Architecture
 
-NyxArch enforces a strict layered design:
+Nyx OS enforces a strict layered design:
 
 1. Firewall (deny-all baseline)
 2. Nyx control layer (Rust binaries)

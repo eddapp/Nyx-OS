@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# NyxArch Bootstrap Script
+# Nyx OS Bootstrap Script
 # Assumes Rust (rustc/cargo) and all deps are already installed on Arch Linux
 # =============================================================================
 
@@ -19,7 +19,7 @@ warn()    { echo -e "${YELLOW}[!!]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERR]${RESET} $*"; exit 1; }
 header()  { echo -e "\n${BOLD}${CYAN}━━━ $* ━━━${RESET}\n"; }
 
-NYXARCH_DIR="$HOME/nyxarch"
+NYXARCH_DIR="$HOME/nyx"
 CRATES=(nyx-core nyx-health nyx-tor nyx-dns nyx-route nyx-wipe nyx-integrity)
 
 # =============================================================================
@@ -100,7 +100,7 @@ cat > "$NYX_CORE/Cargo.toml" << 'TOML'
 name        = "nyx-core"
 version     = "0.1.0"
 edition     = "2021"
-description = "NyxArch shared types, error handling, and structured output"
+description = "Nyx OS shared types, error handling, and structured output"
 
 [dependencies]
 serde              = { workspace = true }
@@ -111,7 +111,7 @@ tracing-subscriber = { workspace = true }
 TOML
 
 cat > "$NYX_CORE/src/lib.rs" << 'RUST'
-//! nyx-core — shared foundation for all NyxArch binaries
+//! nyx-core — shared foundation for all Nyx OS binaries
 
 pub mod error;
 pub mod output;
@@ -156,7 +156,7 @@ pub type NyxResult<T> = Result<T, NyxError>;
 RUST
 
 cat > "$NYX_CORE/src/output.rs" << 'RUST'
-//! Structured JSON output — every NyxArch binary prints this format.
+//! Structured JSON output — every Nyx OS binary prints this format.
 //! The dashboard and Conky monitor both parse this.
 
 use serde::{Deserialize, Serialize};
@@ -286,7 +286,7 @@ mkdir -p "$NYXARCH_DIR/install"/{archinstall,pkgbuild}
 mkdir -p "$NYXARCH_DIR/docs"/{binaries,architecture}
 
 cat > "$NYXARCH_DIR/README.md" << 'MD'
-# NyxArch
+# Nyx OS
 
 Privacy-focused Arch Linux OS. Rust binaries. No shell script soup.
 
@@ -333,7 +333,7 @@ fi
 # =============================================================================
 # Done
 # =============================================================================
-header "NyxArch bootstrap complete"
+header "Nyx OS bootstrap complete"
 
 echo -e "${BOLD}Workspace:${RESET} $NYXARCH_DIR"
 echo ""

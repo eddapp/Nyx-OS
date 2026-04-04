@@ -3,7 +3,7 @@ set -euo pipefail
 
 echo "[NYX] Initializing workspace..."
 
-mkdir -p nyxarch && cd nyxarch
+mkdir -p nyx && cd nyx
 cargo new --lib crates/nyx-core
 cargo new --lib crates/nyx-route
 cargo new --lib crates/nyx-dns

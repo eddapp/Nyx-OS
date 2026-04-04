@@ -1,7 +1,7 @@
-# 🌑 NyxArch
+# 🌑 Nyx OS
 
 <p align="center">
-  <img src="assets/nyxarch-banner.png" width="720"/>
+  <img src="assets/nyx-banner.png" width="720"/>
 </p>
 
 <p align="center">
@@ -18,9 +18,9 @@
 
 ---
 
-## 🧠 What is NyxArch?
+## 🧠 What is Nyx OS?
 
-NyxArch is a **privacy-first Arch-based operating system** built around a **centralized, compiled control layer**.
+Nyx OS is a **privacy-first Arch-based operating system** built around a **centralized, compiled control layer**.
 
 > No implicit networking. No uncontrolled processes. No script glue.
 
@@ -66,7 +66,7 @@ ArchISO
 ## 🚀 Bootstrap
 
 ```bash
-git clone https://github.com/NyxArch/core
+git clone https://github.com/Nyx OS/core
 cd core
 ./bootstrap.sh
 ```
