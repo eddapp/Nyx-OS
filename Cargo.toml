@@ -13,5 +13,7 @@ members = [
     "core/crates/nyx-wipe",
     "core/crates/nyx-isolation",
     "core/crates/nyx-workflow",
+    "core/crates/nyx-hardening",
+    "core/crates/nyx-watch",
     "dashboard",
 ]

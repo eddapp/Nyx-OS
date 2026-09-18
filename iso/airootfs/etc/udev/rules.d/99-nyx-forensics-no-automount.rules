@@ -1,0 +1,45 @@
+# NyxOS "Forensics" boot tier support.
+#
+# The Forensics boot entry (LABEL/title "NyxOS — Forensics: RAM-only") passes
+# `copytoram=y nyx_forensics=1` on the kernel command line. `copytoram=y` is
+# archiso's own, real, documented mechanism (mkinitcpio-archiso's
+# README.bootparams) for copying the whole root filesystem image into tmpfs
+# so nothing after that touches the boot media/disk by default.
+#
+# This file adds the other half of "don't touch local storage": it keeps
+# udisks2 (and anything built on it, e.g. Thunar) from auto-mounting fixed,
+# non-removable local disks -- the machine's own internal drives -- while
+# still leaving the removable boot medium itself, and any removable media an
+# operator explicitly inserts, to behave normally. It intentionally does NOT
+# and CANNOT prevent an operator or a script from running `mount` by hand;
+# there is no real, safe kernel/udev mechanism to block that outright without
+# also breaking the live medium's own boot process, so this only closes the
+# "GUI/automatic" avenue, which is the actual, real behavior of the
+# mechanisms used below (nothing here is a stand-in for a stronger
+# guarantee this file does not actually provide).
+#
+# Mechanism, both real and current:
+#   * udev's IMPORT{cmdline} builtin (see udev(7)) reads a single key
+#     straight off /proc/cmdline and exposes it as a device property; for a
+#     bare flag the imported value is "1". This is how the rule below is
+#     scoped to the Forensics tier only -- on every other NyxOS boot tier
+#     `nyx_forensics` is simply absent from the command line, the import
+#     fails, and none of the rules in this file match anything.
+#   * udisks2's own shipped rules (/usr/lib/udev/rules.d/80-udisks2.rules)
+#     already skip any device carrying ENV{UDISKS_IGNORE}=="1" -- this file
+#     reuses that exact, existing udisks2 mechanism rather than inventing a
+#     new one. Filename sorts after 80-udisks2.rules so it is evaluated
+#     last for any device where both files would otherwise apply.
+#   * ATTR{removable} (whole disks) / ATTRS{removable} (partitions, walking
+#     up to the parent disk device) is the standard sysfs attribute the
+#     kernel exposes at /sys/block/<dev>/removable; "0" means a fixed,
+#     non-removable disk such as an internal SATA/NVMe/eMMC drive.
+
+SUBSYSTEM=="block", IMPORT{cmdline}="nyx_forensics"
+
+# Whole, non-removable disks.
+SUBSYSTEM=="block", ENV{nyx_forensics}=="1", KERNEL=="sd[a-z]|nvme[0-9]n[0-9]|vd[a-z]|mmcblk[0-9]|hd[a-z]", ATTR{removable}=="0", ENV{UDISKS_IGNORE}="1"
+
+# Partitions on those disks (the "removable" flag only exists on the parent
+# whole-disk device, so walk up to it with ATTRS{} instead of ATTR{}).
+SUBSYSTEM=="block", ENV{nyx_forensics}=="1", KERNEL=="sd[a-z][0-9]*|nvme[0-9]n[0-9]p[0-9]*|vd[a-z][0-9]*|mmcblk[0-9]p[0-9]*|hd[a-z][0-9]*", ATTRS{removable}=="0", ENV{UDISKS_IGNORE}="1"

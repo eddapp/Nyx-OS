@@ -1,0 +1,15 @@
+[Unit]
+Description=NyxOS Xray client (VLESS/VMess/Trojan/REALITY) for profile %i
+After=network-online.target dbus.service
+Wants=network-online.target
+PartOf=nyx-vpn.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/xray run -c /etc/nyx/xray/%i.json
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

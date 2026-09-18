@@ -1,0 +1,32 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-hardening so three levels up is the repo root.
+#
+# nyx-hardening is a root-privileged one-shot CLI (swap encryption,
+# cold-boot-defense systemd-sleep hook, shutdown RAM-wipe unit) plus a
+# second, unprivileged binary (nyx-clipboard-clear) that runs as a
+# systemd --user service under the logged-in desktop session.
+pkgname=nyx-hardening
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS hardening CLI — swap encryption, cold-boot defense, RAM-wipe-on-shutdown, clipboard auto-clear"
+arch=('x86_64')
+license=('MIT')
+depends=('cryptsetup' 'secure-delete' 'xclip' 'systemd')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-hardening --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-hardening" \
+    "$pkgdir/usr/bin/nyx-hardening"
+  install -Dm755 "$srcdir/target/release/nyx-clipboard-clear" \
+    "$pkgdir/usr/bin/nyx-clipboard-clear"
+  install -Dm644 "$_repo_root/core/crates/nyx-hardening/packaging/nyx-clipboard-clear.service" \
+    "$pkgdir/usr/lib/systemd/user/nyx-clipboard-clear.service"
+}

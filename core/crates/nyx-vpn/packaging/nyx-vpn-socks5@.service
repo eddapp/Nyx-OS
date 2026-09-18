@@ -1,0 +1,24 @@
+[Unit]
+Description=NyxOS SOCKS5-to-TUN bridge (badvpn-tun2socks) for profile %i
+After=network-online.target dbus.service
+Wants=network-online.target
+PartOf=nyx-vpn.service
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/nyx/socks5/%i.conf
+# badvpn-tun2socks attaches to an existing TUN device, it does not create
+# one itself — see dante.rs's module doc for why nyx-vpn manages routing
+# separately from this unit rather than baking it in here too (the routes
+# depend on the current default gateway and the SOCKS5 server's address,
+# both only known to nyx-vpn at connect time).
+ExecStartPre=/usr/bin/ip tuntap add mode tun dev %i
+ExecStartPre=/usr/bin/ip link set %i up
+ExecStartPre=/usr/bin/ip addr add 10.90.0.1/24 dev %i
+ExecStart=/usr/bin/badvpn-tun2socks --tundev %i --netif-ipaddr 10.90.0.2 --netif-netmask 255.255.255.0 --socks-server-addr ${SOCKS_SERVER_ADDR}
+ExecStopPost=-/usr/bin/ip link del %i
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

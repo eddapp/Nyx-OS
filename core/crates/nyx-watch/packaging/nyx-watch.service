@@ -1,0 +1,23 @@
+[Unit]
+Description=NyxOS process/socket/route/firewall change-detection daemon
+After=local-fs.target nftables.service
+Wants=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nyx-watch
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=nyx
+RuntimeDirectoryMode=0750
+
+# Deliberately no CapabilityBoundingSet/NoNewPrivileges hardening beyond the
+# defaults: this daemon needs full root (CAP_SYS_PTRACE in particular) to
+# read other users' /proc/<pid>/fd/* symlinks when mapping a listening
+# socket's inode back to an owning process — see sockets.rs. Every value it
+# reports still comes from real, world-visible-to-root system state (/proc,
+# `ip route`, `nft list table`, nyx-dns's own socket); nothing here is a
+# fabricated or ML-derived signal.
+
+[Install]
+WantedBy=multi-user.target
