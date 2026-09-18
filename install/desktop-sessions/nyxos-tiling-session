@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# NyxOS "Nyx Tiling" login session: the same XFCE panel, settings daemon,
+# and file manager as the default "Xfce Session", but with i3 in place of
+# xfwm4 as the actual window manager. xfce4-session itself is never
+# started here — it's the one XFCE component that insists on launching its
+# own configured window manager, so this script starts the individual XFCE
+# pieces it would otherwise coordinate, then hands off to i3 directly.
+#
+# The Nyx control plane (nyx-health/nyx-vpn/nyx-identity/nyx-devices/etc.
+# and the dashboard) is unaffected by any of this — it talks to its own
+# root daemons over Unix sockets regardless of which window manager or
+# session script is running.
+set -euo pipefail
+
+# Cursor/keyboard/appearance settings (fonts, theme, DPI) — normally one of
+# the daemons xfce4-session brings up.
+xfsettingsd --daemon &
+
+# Notifications are D-Bus-activated by xfce4-notifyd on first use, so there
+# is nothing to launch explicitly for it here.
+
+# PolicyKit authentication agent — xfce4-session would normally arrange for
+# one; a bare i3 session has none unless something starts it, and several
+# GUI tools (gparted, package management, etc.) need it to prompt for root.
+/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
+
+# File manager daemon (desktop icons/background handling, faster subsequent
+# Thunar launches) and the XFCE panel itself.
+Thunar --daemon &
+xfce4-panel &
+
+# Hand off to i3 as the actual window manager — exec so the display
+# manager/session tracks i3 as this session's main process, rather than
+# leaving this script sitting around as a wrapper.
+exec i3

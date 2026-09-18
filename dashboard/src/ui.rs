@@ -2,8 +2,8 @@ use crate::client;
 use gtk::glib;
 use gtk::prelude::*;
 use nyx_core::{
-    HealthCommand, HealthState, KillSwitchLevel, NyxOutput, SecurityState, Toggle, VpnCommand,
-    VpnProtocol, VpnReport,
+    DevicesCommand, DevicesReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
+    KillSwitchLevel, NyxOutput, SecurityState, Toggle, VpnCommand, VpnProtocol, VpnReport,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -11,6 +11,8 @@ use std::sync::mpsc::TryRecvError;
 
 type ApplyFn = Rc<dyn Fn(Result<NyxOutput<HealthState>, String>)>;
 type VpnApplyFn = Rc<dyn Fn(Result<NyxOutput<VpnReport>, String>)>;
+type IdentityApplyFn = Rc<dyn Fn(Result<NyxOutput<IdentityReport>, String>)>;
+type DevicesApplyFn = Rc<dyn Fn(Result<NyxOutput<DevicesReport>, String>)>;
 
 fn load_css() {
     let provider = gtk::CssProvider::new();
@@ -45,6 +47,14 @@ fn status_row(label: &str) -> (gtk::Box, gtk::Box, gtk::Label) {
     (row, dot, text)
 }
 
+fn section_heading(text: &str) -> gtk::Label {
+    let label = gtk::Label::new(None);
+    label.set_markup(&format!("<b>{text}</b>"));
+    label.set_halign(gtk::Align::Start);
+    label.set_margin_top(6);
+    label
+}
+
 fn set_dot(dot: &gtk::Box, on: bool) {
     dot.remove_css_class(if on { "dot-off" } else { "dot-on" });
     dot.add_css_class(if on { "dot-on" } else { "dot-off" });
@@ -55,6 +65,13 @@ fn set_dot_classes(dot: &gtk::Box, class: &str) {
         dot.remove_css_class(c);
     }
     dot.add_css_class(class);
+}
+
+/// Same on/off dot, but takes an `Option<bool>` — `None` (the check itself
+/// failed, or nothing to report) shows the same as off rather than lying
+/// with a default.
+fn set_dot_opt(dot: &gtk::Box, on: Option<bool>) {
+    set_dot(dot, on.unwrap_or(false));
 }
 
 /// Kill-switch levels get their own four-colour scale instead of the plain
@@ -72,7 +89,8 @@ fn set_level_dot(dot: &gtk::Box, level: KillSwitchLevel) {
 
 /// Same four-colour scale, driven by the daemon's own assessed
 /// `SecurityState` rather than a raw connected/disconnected bit — a
-/// connected-but-unverified VPN shows as Degraded (orange), not Protected.
+/// connected-but-unverified VPN (or a running-but-misconfigured USBGuard)
+/// shows as Degraded (orange), not Protected.
 fn set_security_dot(dot: &gtk::Box, state: SecurityState) {
     let class = match state {
         SecurityState::Protected => "dot-on",
@@ -94,12 +112,26 @@ fn level_label(level: KillSwitchLevel) -> &'static str {
     }
 }
 
-/// Runs `cmd` on a background thread (the health socket is blocking I/O) and
-/// applies the result back on the GTK main thread once it arrives.
-fn run_command(cmd: HealthCommand, apply: ApplyFn) {
+fn on_off(state: Option<bool>) -> &'static str {
+    match state {
+        Some(true) => "on",
+        Some(false) => "off",
+        None => "unknown",
+    }
+}
+
+/// Runs `cmd` on a background thread (the socket call is blocking I/O) and
+/// applies the result back on the GTK main thread once it arrives. Shared
+/// shape for every daemon socket the dashboard talks to.
+fn run_on_background<C, R, F>(cmd: C, send: F, apply: Rc<dyn Fn(Result<R, String>)>)
+where
+    C: Send + 'static,
+    R: Send + 'static,
+    F: FnOnce(C) -> Result<R, String> + Send + 'static,
+{
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = client::send(cmd);
+        let result = send(cmd);
         let _ = tx.send(result);
     });
 
@@ -113,21 +145,20 @@ fn run_command(cmd: HealthCommand, apply: ApplyFn) {
     });
 }
 
-fn run_vpn_command(cmd: VpnCommand, apply: VpnApplyFn) {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let result = client::send_vpn(cmd);
-        let _ = tx.send(result);
-    });
+fn run_command(cmd: HealthCommand, apply: ApplyFn) {
+    run_on_background(cmd, client::send, apply);
+}
 
-    glib::idle_add_local(move || match rx.try_recv() {
-        Ok(result) => {
-            apply(result);
-            glib::ControlFlow::Break
-        }
-        Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
-        Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
-    });
+fn run_vpn_command(cmd: VpnCommand, apply: VpnApplyFn) {
+    run_on_background(cmd, client::send_vpn, apply);
+}
+
+fn run_identity_command(cmd: IdentityCommand, apply: IdentityApplyFn) {
+    run_on_background(cmd, client::send_identity, apply);
+}
+
+fn run_devices_command(cmd: DevicesCommand, apply: DevicesApplyFn) {
+    run_on_background(cmd, client::send_devices, apply);
 }
 
 pub fn build(app: &gtk::Application) {
@@ -136,8 +167,8 @@ pub fn build(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("NyxOS Control")
-        .default_width(420)
-        .default_height(560)
+        .default_width(440)
+        .default_height(640)
         .build();
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -151,6 +182,7 @@ pub fn build(app: &gtk::Application) {
     heading.set_halign(gtk::Align::Start);
     root.append(&heading);
 
+    // --- Network health: Tor, kill switch, panic --------------------------
     let (tor_row, tor_dot, tor_label) = status_row("Tor");
     let (ks_row, ks_dot, ks_label) = status_row("Kill Switch");
     let (panic_row, panic_dot, panic_label) = status_row("Panic Mode");
@@ -158,8 +190,7 @@ pub fn build(app: &gtk::Application) {
     root.append(&ks_row);
     root.append(&panic_row);
 
-    let sep1 = gtk::Separator::new(gtk::Orientation::Horizontal);
-    root.append(&sep1);
+    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     let tor_btn = gtk::Button::with_label("Toggle Tor");
     root.append(&tor_btn);
@@ -183,9 +214,9 @@ pub fn build(app: &gtk::Application) {
     panic_btn.add_css_class("destructive-action");
     root.append(&panic_btn);
 
-    let sep2 = gtk::Separator::new(gtk::Orientation::Horizontal);
-    root.append(&sep2);
+    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
+    // --- VPN -----------------------------------------------------------
     let (vpn_row, vpn_dot, vpn_label) = status_row("VPN");
     root.append(&vpn_row);
 
@@ -213,19 +244,106 @@ pub fn build(app: &gtk::Application) {
     vpn_action_row.append(&vpn_disconnect_btn);
     root.append(&vpn_action_row);
 
-    let sep3 = gtk::Separator::new(gtk::Orientation::Horizontal);
-    root.append(&sep3);
+    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    // --- Identity --------------------------------------------------------
+    root.append(&section_heading("Identity"));
+
+    let hostname_label = gtk::Label::new(Some("Hostname: unknown"));
+    hostname_label.set_halign(gtk::Align::Start);
+    root.append(&hostname_label);
+    let hostname_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let hostname_randomize_btn = gtk::Button::with_label("Randomize");
+    let hostname_restore_btn = gtk::Button::with_label("Restore original");
+    hostname_row.append(&hostname_randomize_btn);
+    hostname_row.append(&hostname_restore_btn);
+    root.append(&hostname_row);
+
+    let timezone_label = gtk::Label::new(Some("Timezone: unknown"));
+    timezone_label.set_halign(gtk::Align::Start);
+    root.append(&timezone_label);
+    let timezone_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let timezone_randomize_btn = gtk::Button::with_label("Randomize");
+    let timezone_restore_btn = gtk::Button::with_label("Restore original");
+    timezone_row.append(&timezone_randomize_btn);
+    timezone_row.append(&timezone_restore_btn);
+    root.append(&timezone_row);
+
+    let mac_label = gtk::Label::new(Some("MAC: unknown"));
+    mac_label.set_halign(gtk::Align::Start);
+    root.append(&mac_label);
+    let mac_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let mac_randomize_btn = gtk::Button::with_label("Randomize");
+    let mac_restore_btn = gtk::Button::with_label("Restore permanent");
+    mac_row.append(&mac_randomize_btn);
+    mac_row.append(&mac_restore_btn);
+    root.append(&mac_row);
+
+    let (ipv6_row, ipv6_dot, ipv6_label) = status_row("IPv6");
+    root.append(&ipv6_row);
+    let ipv6_row_btns = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let ipv6_on_btn = gtk::Button::with_label("Enable");
+    let ipv6_off_btn = gtk::Button::with_label("Disable");
+    ipv6_row_btns.append(&ipv6_on_btn);
+    ipv6_row_btns.append(&ipv6_off_btn);
+    root.append(&ipv6_row_btns);
+
+    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    // --- Devices -----------------------------------------------------------
+    root.append(&section_heading("Devices"));
+
+    let (wifi_row, wifi_dot, wifi_label) = status_row("WiFi");
+    let (bt_row, bt_dot, bt_label) = status_row("Bluetooth");
+    let (cam_row, cam_dot, cam_label) = status_row("Webcam");
+    let (mic_row, mic_dot, mic_label) = status_row("Microphone");
+    let (usbstor_row, usbstor_dot, usbstor_label) = status_row("USB Storage");
+    let (usbguard_row, usbguard_dot, usbguard_label) = status_row("USBGuard");
+    for row in [&wifi_row, &bt_row, &cam_row, &mic_row, &usbstor_row, &usbguard_row] {
+        root.append(row);
+    }
+
+    let devices_detail_label = gtk::Label::new(None);
+    devices_detail_label.set_wrap(true);
+    devices_detail_label.set_halign(gtk::Align::Start);
+    root.append(&devices_detail_label);
+
+    let device_toggle_row = |on_label: &str, off_label: &str| {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let on_btn = gtk::Button::with_label(on_label);
+        let off_btn = gtk::Button::with_label(off_label);
+        row.append(&on_btn);
+        row.append(&off_btn);
+        (row, on_btn, off_btn)
+    };
+
+    let (wifi_btn_row, wifi_on_btn, wifi_off_btn) = device_toggle_row("On", "Off");
+    let (bt_btn_row, bt_on_btn, bt_off_btn) = device_toggle_row("On", "Off");
+    let (cam_btn_row, cam_on_btn, cam_off_btn) = device_toggle_row("On", "Off");
+    let (mic_btn_row, mic_on_btn, mic_off_btn) = device_toggle_row("On", "Off");
+    let (usbstor_btn_row, usbstor_on_btn, usbstor_off_btn) = device_toggle_row("On", "Off");
+    let (usbguard_btn_row, usbguard_start_btn, usbguard_stop_btn) = device_toggle_row("Start", "Stop");
+    for row in [&wifi_btn_row, &bt_btn_row, &cam_btn_row, &mic_btn_row, &usbstor_btn_row, &usbguard_btn_row] {
+        root.append(row);
+    }
 
     let status_label = gtk::Label::new(Some("connecting to nyx-health…"));
     status_label.set_wrap(true);
     status_label.set_halign(gtk::Align::Start);
     root.append(&status_label);
 
-    window.set_child(Some(&root));
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_child(Some(&root));
+    scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
+    window.set_child(Some(&scroller));
     window.present();
 
     let cached = Rc::new(RefCell::new(HealthState::default()));
     let vpn_protocol = Rc::new(Cell::new(VpnProtocol::WireGuard));
+    // The interface Randomize/Restore MAC act on — the first one reported
+    // by nyx-identity. A future revision could let the user pick among
+    // several; most machines only have one to worry about.
+    let mac_interface = Rc::new(RefCell::new(None::<String>));
 
     let apply: ApplyFn = {
         let cached = Rc::clone(&cached);
@@ -279,15 +397,77 @@ pub fn build(app: &gtk::Application) {
         Err(e) => vpn_detail_label.set_label(&format!("error: {e}")),
     });
 
+    let identity_apply: IdentityApplyFn = {
+        let mac_interface = Rc::clone(&mac_interface);
+        Rc::new(move |result: Result<NyxOutput<IdentityReport>, String>| match result {
+            Ok(out) => {
+                if let Some(report) = out.data {
+                    hostname_label.set_label(&format!(
+                        "Hostname: {}",
+                        report.hostname.as_deref().unwrap_or("unknown")
+                    ));
+                    timezone_label.set_label(&format!(
+                        "Timezone: {}",
+                        report.timezone.as_deref().unwrap_or("unknown")
+                    ));
+                    set_dot_opt(&ipv6_dot, report.ipv6_enabled);
+                    ipv6_label.set_label(&format!("IPv6: {}", on_off(report.ipv6_enabled)));
+
+                    if let Some(first) = report.interfaces.first() {
+                        *mac_interface.borrow_mut() = Some(first.interface.clone());
+                        mac_label.set_label(&format!(
+                            "MAC ({}): {}",
+                            first.interface,
+                            first.mac_address.as_deref().unwrap_or("unknown")
+                        ));
+                    } else {
+                        mac_label.set_label("MAC: no interface found");
+                    }
+                }
+            }
+            Err(e) => hostname_label.set_label(&format!("error: {e}")),
+        })
+    };
+
+    let devices_apply: DevicesApplyFn =
+        Rc::new(move |result: Result<NyxOutput<DevicesReport>, String>| match result {
+            Ok(out) => {
+                if let Some(report) = out.data {
+                    set_dot_opt(&wifi_dot, report.wifi_enabled);
+                    wifi_label.set_label(&format!("WiFi: {}", on_off(report.wifi_enabled)));
+                    set_dot_opt(&bt_dot, report.bluetooth_enabled);
+                    bt_label.set_label(&format!("Bluetooth: {}", on_off(report.bluetooth_enabled)));
+                    set_dot_opt(&cam_dot, report.webcam_enabled);
+                    cam_label.set_label(&format!("Webcam: {}", on_off(report.webcam_enabled)));
+                    set_dot_opt(&mic_dot, report.microphone_enabled);
+                    mic_label.set_label(&format!("Microphone: {}", on_off(report.microphone_enabled)));
+                    set_dot_opt(&usbstor_dot, report.usb_storage_enabled);
+                    usbstor_label
+                        .set_label(&format!("USB Storage: {}", on_off(report.usb_storage_enabled)));
+                    set_security_dot(&usbguard_dot, report.state);
+                    usbguard_label
+                        .set_label(&format!("USBGuard: {}", on_off(report.usbguard_active)));
+                    devices_detail_label.set_label(&report.detail);
+                }
+            }
+            Err(e) => devices_detail_label.set_label(&format!("error: {e}")),
+        });
+
     run_command(HealthCommand::Status, Rc::clone(&apply));
     run_vpn_command(VpnCommand::Status, Rc::clone(&vpn_apply));
+    run_identity_command(IdentityCommand::Status, Rc::clone(&identity_apply));
+    run_devices_command(DevicesCommand::Status, Rc::clone(&devices_apply));
 
     {
         let apply = Rc::clone(&apply);
         let vpn_apply = Rc::clone(&vpn_apply);
+        let identity_apply = Rc::clone(&identity_apply);
+        let devices_apply = Rc::clone(&devices_apply);
         glib::timeout_add_seconds_local(5, move || {
             run_command(HealthCommand::Status, Rc::clone(&apply));
             run_vpn_command(VpnCommand::Status, Rc::clone(&vpn_apply));
+            run_identity_command(IdentityCommand::Status, Rc::clone(&identity_apply));
+            run_devices_command(DevicesCommand::Status, Rc::clone(&devices_apply));
             glib::ControlFlow::Continue
         });
     }
@@ -382,6 +562,168 @@ pub fn build(app: &gtk::Application) {
         let vpn_apply = Rc::clone(&vpn_apply);
         move |_| {
             run_vpn_command(VpnCommand::Disconnect, Rc::clone(&vpn_apply));
+        }
+    });
+
+    hostname_randomize_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        move |_| run_identity_command(IdentityCommand::RandomizeHostname, Rc::clone(&identity_apply))
+    });
+    hostname_restore_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        move |_| run_identity_command(IdentityCommand::RestoreHostname, Rc::clone(&identity_apply))
+    });
+    timezone_randomize_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        move |_| run_identity_command(IdentityCommand::RandomizeTimezone, Rc::clone(&identity_apply))
+    });
+    timezone_restore_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        move |_| run_identity_command(IdentityCommand::RestoreTimezone, Rc::clone(&identity_apply))
+    });
+    mac_randomize_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        let mac_interface = Rc::clone(&mac_interface);
+        move |_| {
+            if let Some(interface) = mac_interface.borrow().clone() {
+                run_identity_command(
+                    IdentityCommand::RandomizeMac { interface },
+                    Rc::clone(&identity_apply),
+                );
+            }
+        }
+    });
+    mac_restore_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        let mac_interface = Rc::clone(&mac_interface);
+        move |_| {
+            if let Some(interface) = mac_interface.borrow().clone() {
+                run_identity_command(
+                    IdentityCommand::RestoreMac { interface },
+                    Rc::clone(&identity_apply),
+                );
+            }
+        }
+    });
+    ipv6_on_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        move |_| {
+            run_identity_command(IdentityCommand::SetIpv6 { enabled: true }, Rc::clone(&identity_apply))
+        }
+    });
+    ipv6_off_btn.connect_clicked({
+        let identity_apply = Rc::clone(&identity_apply);
+        move |_| {
+            run_identity_command(IdentityCommand::SetIpv6 { enabled: false }, Rc::clone(&identity_apply))
+        }
+    });
+
+    wifi_on_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetRadio { radio: nyx_core::DeviceRadio::Wifi, on: true },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    wifi_off_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetRadio { radio: nyx_core::DeviceRadio::Wifi, on: false },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    bt_on_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetRadio { radio: nyx_core::DeviceRadio::Bluetooth, on: true },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    bt_off_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetRadio { radio: nyx_core::DeviceRadio::Bluetooth, on: false },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    cam_on_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetModule { module: nyx_core::DeviceModule::Webcam, enabled: true },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    cam_off_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetModule { module: nyx_core::DeviceModule::Webcam, enabled: false },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    mic_on_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetMicrophone { enabled: true },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    mic_off_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetMicrophone { enabled: false },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    usbstor_on_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetModule { module: nyx_core::DeviceModule::UsbStorage, enabled: true },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    usbstor_off_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetModule { module: nyx_core::DeviceModule::UsbStorage, enabled: false },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    usbguard_start_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetUsbGuard { enabled: true },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    usbguard_stop_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(
+                DevicesCommand::SetUsbGuard { enabled: false },
+                Rc::clone(&devices_apply),
+            )
         }
     });
 }

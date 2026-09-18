@@ -2,7 +2,10 @@
 //! line of JSON out — always called from a background thread so it never
 //! blocks the GTK main loop.
 
-use nyx_core::{HealthCommand, HealthState, NyxOutput, VpnCommand, VpnReport, HEALTH_SOCKET, VPN_SOCKET};
+use nyx_core::{
+    DevicesCommand, DevicesReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
+    NyxOutput, VpnCommand, VpnReport, DEVICES_SOCKET, HEALTH_SOCKET, IDENTITY_SOCKET, VPN_SOCKET,
+};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Write};
@@ -31,4 +34,12 @@ pub fn send(cmd: HealthCommand) -> Result<NyxOutput<HealthState>, String> {
 
 pub fn send_vpn(cmd: VpnCommand) -> Result<NyxOutput<VpnReport>, String> {
     call(VPN_SOCKET, &cmd)
+}
+
+pub fn send_identity(cmd: IdentityCommand) -> Result<NyxOutput<IdentityReport>, String> {
+    call(IDENTITY_SOCKET, &cmd)
+}
+
+pub fn send_devices(cmd: DevicesCommand) -> Result<NyxOutput<DevicesReport>, String> {
+    call(DEVICES_SOCKET, &cmd)
 }

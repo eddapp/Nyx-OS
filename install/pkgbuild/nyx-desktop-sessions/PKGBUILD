@@ -1,0 +1,23 @@
+# Maintainer: NyxOS
+# Packages the optional "Nyx Tiling" login session — XFCE's panel/settings/
+# file-manager pieces with i3 substituted for xfwm4 as the window manager.
+# No compilation. The default "Xfce Session" entry (xfwm4) ships from the
+# xfce4/lightdm packages themselves and is untouched by this package.
+pkgname=nyx-desktop-sessions
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS optional tiling login session (XFCE panel/utilities + i3 as window manager)"
+arch=('any')
+license=('MIT')
+depends=('i3-wm' 'i3status' 'i3lock' 'dmenu' 'polkit-gnome' 'xfce4-panel' 'xfce4-settings' 'thunar' 'lightdm')
+
+_repo_root="$startdir/../../.."
+_session_dir="$_repo_root/install/desktop-sessions"
+
+package() {
+  install -Dm755 "$_session_dir/nyxos-tiling-session" \
+    "$pkgdir/usr/lib/nyx/session/nyxos-tiling-session"
+
+  install -Dm644 "$_session_dir/nyxos-tiling.desktop" \
+    "$pkgdir/usr/share/xsessions/nyxos-tiling.desktop"
+}
