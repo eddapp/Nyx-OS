@@ -1,6 +1,26 @@
-target/
-node_modules/
-dist/
-*.log
-.env
-.DS_Store
+# Rust
+# Cargo.lock is intentionally NOT ignored: nyx-health/nyx-dashboard are
+# binaries and their PKGBUILDs build with --locked, so it must be committed.
+/target/
+**/target/
+
+# archiso build output
+/iso/work/
+/iso/out/
+/iso/local-repo/
+/iso/pacman.conf.local
+
+# built OS images (too large for git; build artifacts, not source)
+/archlinux/
+*.iso
+*.img
+*.qcow2
+
+# makepkg artifacts
+install/pkgbuild/*/pkg/
+install/pkgbuild/*/src/
+install/pkgbuild/*/*.pkg.tar.*
+install/pkgbuild/*/*.log
+
+# JetBrains
+.idea/

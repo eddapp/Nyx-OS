@@ -1,0 +1,26 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-isolation so three levels up is the repo root.
+#
+# nyx-isolation is a one-shot, unprivileged CLI, not a daemon — no .service
+# unit to install. See core/crates/nyx-isolation/src/main.rs.
+pkgname=nyx-isolation
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS application sandbox launcher (Firejail-backed, validated allowlist)"
+arch=('x86_64')
+license=('MIT')
+depends=('firejail')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-isolation --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-isolation" \
+    "$pkgdir/usr/bin/nyx-isolation"
+}

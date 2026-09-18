@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=NyxOS Control
+Comment=Tor, kill switch, and panic control for NyxOS
+Exec=/usr/bin/nyx-dashboard
+Icon=security-high
+Terminal=false
+Categories=System;Security;Network;

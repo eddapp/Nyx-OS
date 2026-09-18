@@ -1,0 +1,269 @@
+//! Wire protocol between `nyx-health` (the root daemon that owns the kill
+//! switch, firewall, and service lifecycle) and its clients — the dashboard,
+//! and eventually a CLI. Transport is newline-delimited JSON over the Unix
+//! socket at `/run/nyx/health.sock`.
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Toggle {
+    On,
+    Off,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum HealthCommand {
+    /// Report current state.
+    Status,
+    /// Immediately drop all traffic except loopback and stop Tor. One-way —
+    /// only a fresh `nyx-health` restart clears it. Distinct from
+    /// `KillSwitch { level: Armed }`: panic also stops Tor and cannot be
+    /// undone by `Disarm` — only a daemon restart clears it.
+    Panic,
+    /// Start or stop the Tor daemon.
+    Tor { action: Toggle },
+    /// Set the kill-switch posture. This is a single selection out of four
+    /// mutually exclusive levels, not an independent toggle — see
+    /// [`KillSwitchLevel`] for what each one actually enforces.
+    KillSwitch { level: KillSwitchLevel },
+}
+
+/// The kill switch is a ladder of firewall postures, not a single on/off
+/// bit — "on" meant different things to different callers in practice
+/// (block new connections vs. sever everything instantly), so those are
+/// separate, explicitly named levels instead of one boolean plus tribal
+/// knowledge about what it currently does.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KillSwitchLevel {
+    /// No restriction — traffic keeps flowing even if the tunnel dies.
+    #[default]
+    Off,
+    /// Blocks new outbound connections; connections already established
+    /// (e.g. before the tunnel dropped) are left alone until they close on
+    /// their own.
+    Soft,
+    /// Everything Soft does, plus severs any already-established
+    /// connection that isn't going out over the designated tunnel
+    /// interface. If no tunnel interface can be detected, nyx-health
+    /// refuses to silently claim this level and reports it as Soft instead
+    /// (see `HealthState.kill_switch_warning`).
+    Medium,
+    /// Total, immediate lockdown in both directions except loopback —
+    /// equivalent in effect to `Panic`'s network posture, but reversible
+    /// via `KillSwitch { level: Off }` without restarting the daemon, and
+    /// does not stop Tor or set `panic_mode`.
+    Armed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct HealthState {
+    pub tor_active: bool,
+    pub kill_switch_level: KillSwitchLevel,
+    /// The tunnel interface nyx-health auto-detected (first `wg*`/`tun*`/
+    /// `ppp*` interface it finds) and used the last time it enforced
+    /// `Medium`. `None` means Medium can't currently be enforced as
+    /// designed and falls back to Soft.
+    pub kill_switch_tunnel_iface: Option<String>,
+    /// Set when the last `KillSwitch` command couldn't do exactly what was
+    /// asked (e.g. Medium requested with no tunnel interface present).
+    pub kill_switch_warning: Option<String>,
+    pub panic_mode: bool,
+}
+
+/// Coarse security posture shared by every subsystem that can actually
+/// *assess* whether the property it owns is holding — never set to
+/// `Protected` merely because a process happens to be running. Each daemon
+/// derives this from its own real checks (socket state, listener presence,
+/// live query behaviour, checksum comparison, ...), not from "did I try to
+/// start the service".
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SecurityState {
+    /// No check has run yet.
+    #[default]
+    Unknown,
+    /// A check is in flight / the subsystem is initializing.
+    Starting,
+    /// The property this subsystem owns is verified and holding.
+    Protected,
+    /// Partially verified — some expected control is missing or unverifiable,
+    /// but nothing is actively leaking/broken as far as we can tell.
+    Degraded,
+    /// The property is not holding; traffic/state that should be blocked is
+    /// (or may be) getting through.
+    Blocked,
+    /// A destructive/defensive lockdown is active (e.g. nyx-health panic).
+    Emergency,
+    /// The check itself failed (couldn't reach a service, bad permissions).
+    Error,
+}
+
+// ---------------------------------------------------------------------------
+// nyx-dns wire protocol — socket at `DNS_SOCKET`.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum DnsCommand {
+    /// Return the last computed report (computed fresh — checks here are
+    /// cheap: file reads, /proc scans, one loopback query).
+    Status,
+}
+
+/// Result of actually checking the DNS path, not just "is a process running".
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DnsReport {
+    /// `/etc/resolv.conf` lists only loopback nameservers.
+    pub resolver_is_local: bool,
+    /// Raw nameserver lines found in `/etc/resolv.conf`.
+    pub resolver_addrs: Vec<String>,
+    /// `dnscrypt-proxy.service` is active per systemd.
+    pub dnscrypt_active: bool,
+    /// A live query against 127.0.0.1:53 actually returned a response.
+    pub resolves: bool,
+    /// Something other than dnscrypt-proxy is bound to port 53 on a
+    /// non-loopback address — a potential leak path around the enforced
+    /// resolver.
+    pub foreign_listener_on_53: bool,
+    pub state: SecurityState,
+    pub detail: String,
+}
+
+// ---------------------------------------------------------------------------
+// nyx-integrity wire protocol — socket at `INTEGRITY_SOCKET`.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum IntegrityCommand {
+    /// Return the last completed report without re-scanning.
+    Status,
+    /// Re-run verification now. `quick=true` limits the pacman file-integrity
+    /// scan to NyxOS-critical packages instead of the whole system (which can
+    /// take minutes on a large install).
+    Verify { quick: bool },
+    /// Recompute and persist the manifest of Nyx-owned files (binaries,
+    /// firewall ruleset, service units) from what's on disk *right now*.
+    /// This is a trust-on-first-use operation — call it once, right after a
+    /// known-good install/update, not routinely.
+    Baseline,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct IntegrityReport {
+    pub manifest_present: bool,
+    pub manifest_checked: usize,
+    pub manifest_mismatches: Vec<String>,
+    pub package_scanned: usize,
+    pub package_mismatches: Vec<String>,
+    pub state: SecurityState,
+    pub detail: String,
+}
+
+// ---------------------------------------------------------------------------
+// nyx-wipe wire types. nyx-wipe is deliberately a one-shot privileged CLI,
+// not a resident daemon — see core/crates/nyx-wipe/src/main.rs for why. These
+// types exist so its JSON output matches every other Nyx binary and so the
+// dashboard can deserialize it after shelling out via pkexec.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum WipeTarget {
+    /// Shell history files (bash/zsh) for all local users.
+    ShellHistory,
+    /// `/tmp` and `/var/tmp` contents not currently held open.
+    Tmp,
+    /// Thumbnail cache (`~/.cache/thumbnails`) for all local users.
+    Thumbnails,
+    /// Recently-used file lists (`~/.local/share/recently-used.xbel`, XFCE/
+    /// GTK recent-files chooser state) for all local users.
+    RecentFiles,
+    /// Rotate/vacuum the systemd journal down to nothing older than now.
+    Logs,
+}
+
+// ---------------------------------------------------------------------------
+// nyx-vpn wire protocol — socket at `VPN_SOCKET`.
+//
+// Only protocols with a real backend on this system are represented here.
+// There is no placeholder variant for a transport NyxOS doesn't actually
+// implement yet — adding one to this enum should mean a working `up`/`down`/
+// `status` path exists in nyx-vpn, not a UI button with nothing behind it.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum VpnProtocol {
+    /// `wg-quick`, profiles at `/etc/wireguard/<name>.conf`.
+    WireGuard,
+    /// `openvpn-client@<name>.service`, profiles at
+    /// `/etc/openvpn/client/<name>.conf`.
+    OpenVpn,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct VpnProfile {
+    pub protocol: VpnProtocol,
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum VpnCommand {
+    /// Report current state, re-derived from live probes each call (active
+    /// interfaces, handshake recency, default-route ownership) — never just
+    /// "what did we last set".
+    Status,
+    /// List every profile found on disk for either backend.
+    List,
+    /// Bring up exactly one profile. If a different profile/protocol is
+    /// already up, it is torn down first — NyxOS never runs two VPN
+    /// tunnels at once, to avoid ambiguous routing.
+    Connect { protocol: VpnProtocol, profile: String },
+    /// Tear down whatever is currently up, if anything.
+    Disconnect,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct VpnReport {
+    pub connected: bool,
+    pub protocol: Option<VpnProtocol>,
+    pub profile: Option<String>,
+    pub interface: Option<String>,
+    /// WireGuard only. `None` means either not connected, or connected but
+    /// no handshake has happened yet — which is normal immediately after
+    /// `wg-quick up` on a config with no traffic and no persistent
+    /// keepalive; it does not by itself mean anything is wrong.
+    pub handshake_age_secs: Option<u64>,
+    /// True only when the OS default route actually goes out the VPN
+    /// interface. An "up" tunnel that isn't carrying the default route may
+    /// not be protecting the traffic the caller cares about.
+    pub default_route_via_vpn: bool,
+    pub state: SecurityState,
+    pub detail: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct VpnProfileList {
+    pub profiles: Vec<VpnProfile>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct WipeReport {
+    pub target: String,
+    /// False for every target here — all of them destroy the only copy of
+    /// the data. Kept explicit so the CLI/dashboard never has to guess.
+    pub reversible: bool,
+    pub files_affected: usize,
+    pub bytes_affected: u64,
+    /// False on a `plan` (dry-run); true only after `execute --yes` actually
+    /// ran.
+    pub executed: bool,
+    /// Non-fatal caveats, e.g. "target is SSD/NVMe — overwritten bytes are
+    /// not guaranteed erased at the flash-translation-layer level".
+    pub warnings: Vec<String>,
+}

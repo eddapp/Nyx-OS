@@ -1,0 +1,26 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-workflow so three levels up is the repo root.
+#
+# nyx-workflow is an unprivileged CLI, not a daemon — every step it runs
+# calls into an already-privileged Nyx daemon (nyx-health/nyx-dns/
+# nyx-integrity) over its own socket, so this binary itself needs no root.
+pkgname=nyx-workflow
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS multi-step security workflow runner"
+arch=('x86_64')
+license=('MIT')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-workflow --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-workflow" \
+    "$pkgdir/usr/bin/nyx-workflow"
+}

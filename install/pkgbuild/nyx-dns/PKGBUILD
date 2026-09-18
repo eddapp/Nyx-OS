@@ -1,0 +1,25 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-dns so three levels up is the repo root.
+pkgname=nyx-dns
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS DNS enforcement and leak-verification daemon"
+arch=('x86_64')
+license=('MIT')
+depends=('dnscrypt-proxy' 'systemd')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-dns --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-dns" \
+    "$pkgdir/usr/bin/nyx-dns"
+  install -Dm644 "$_repo_root/core/crates/nyx-dns/packaging/nyx-dns.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-dns.service"
+}

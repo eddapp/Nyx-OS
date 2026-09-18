@@ -1,0 +1,25 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-dashboard so three levels up is the repo root.
+pkgname=nyx-dashboard
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS control panel — Tor, kill switch, and panic control"
+arch=('x86_64')
+license=('MIT')
+depends=('gtk4')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-dashboard --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-dashboard" \
+    "$pkgdir/usr/bin/nyx-dashboard"
+  install -Dm644 "$_repo_root/dashboard/packaging/org.nyxos.Dashboard.desktop" \
+    "$pkgdir/usr/share/applications/org.nyxos.Dashboard.desktop"
+}

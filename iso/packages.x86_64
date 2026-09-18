@@ -1,0 +1,102 @@
+# NyxOS package set: vanilla Arch base + BlackArch privacy/anonymity tool
+# groups + XFCE desktop. One package name per line, '#' starts a comment.
+
+# --- Base system ---
+base
+base-devel
+linux
+linux-firmware
+linux-headers
+mkinitcpio
+mkinitcpio-archiso
+sudo
+which
+vim
+nano
+git
+man-db
+man-pages
+bash-completion
+reflector
+
+# --- Boot / install tooling ---
+syslinux
+grub
+efibootmgr
+intel-ucode
+amd-ucode
+dosfstools
+e2fsprogs
+gptfdisk
+parted
+arch-install-scripts
+archinstall
+rsync
+
+# --- Networking core ---
+networkmanager
+network-manager-applet
+nftables
+openssh
+wireguard-tools
+openvpn
+macchanger
+
+# --- Privacy stack (control layer targets) ---
+tor
+dnscrypt-proxy
+
+# --- NyxOS control layer (built from install/pkgbuild/, see build.sh) ---
+nyx-health
+nyx-dns
+nyx-integrity
+nyx-wipe
+nyx-isolation
+nyx-workflow
+nyx-thunar-integration
+nyx-dashboard
+
+# --- Graphics / display ---
+xorg-server
+xorg-xinit
+mesa
+xf86-video-vesa
+
+# --- Desktop environment ---
+xfce4
+xfce4-goodies
+lightdm
+lightdm-gtk-greeter
+pipewire
+pipewire-pulse
+pavucontrol
+ttf-dejavu
+noto-fonts
+
+# --- Rust toolchain for the control layer ---
+rust
+
+# --- BlackArch: anonymity / anti-forensics / crypto tooling ---
+blackarch-anti-forensic
+blackarch-crypto
+blackarch-proxy
+blackarch-spoof
+blackarch-sniffer
+blackarch-networking
+blackarch-forensic
+
+# --- Application isolation (backs nyx-isolation) ---
+firejail
+firetools
+
+# --- Desktop security/privacy apps, wired into Thunar/nyx-wipe/nyx-isolation ---
+keepassxc
+mat2
+perl-image-exiftool
+wipe
+gocryptfs
+usbguard
+xterm
+ent
+gnupg
+xclip

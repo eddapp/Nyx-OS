@@ -1,0 +1,25 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-health so three levels up is the repo root.
+pkgname=nyx-health
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS control daemon — kill switch, firewall, and Tor lifecycle"
+arch=('x86_64')
+license=('MIT')
+depends=('nftables' 'tor' 'systemd')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-health --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-health" \
+    "$pkgdir/usr/bin/nyx-health"
+  install -Dm644 "$_repo_root/core/crates/nyx-health/packaging/nyx-health.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-health.service"
+}

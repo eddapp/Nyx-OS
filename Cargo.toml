@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = [
+    "core/crates/nyx-core",
+    "core/crates/nyx-health",
+    "core/crates/nyx-dns",
+    "core/crates/nyx-integrity",
+    "core/crates/nyx-wipe",
+    "core/crates/nyx-isolation",
+    "core/crates/nyx-workflow",
+    "dashboard",
+]

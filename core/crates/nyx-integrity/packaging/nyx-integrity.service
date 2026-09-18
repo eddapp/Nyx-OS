@@ -1,0 +1,15 @@
+[Unit]
+Description=NyxOS system integrity verification daemon
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nyx-integrity
+Restart=on-failure
+RestartSec=5
+RuntimeDirectory=nyx
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

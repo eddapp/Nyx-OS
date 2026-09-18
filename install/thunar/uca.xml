@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  NyxOS default Thunar custom actions. Installed system-wide at
+  /etc/xdg/Thunar/uca.xml, which Thunar merges with (and lets the user
+  override in) their own ~/.config/Thunar/uca.xml.
+
+  Every destructive action here delegates to a reviewed Nyx binary
+  (nyx-wipe, nyx-isolation) or a well-known tool (mat2, sha256sum, pkexec)
+  rather than reimplementing path/privilege logic in shell — see
+  install/thunar/nyx-thunar-*.sh, which are UI glue only.
+-->
+<actions>
+  <action>
+    <icon>edit-delete</icon>
+    <name>NyxOS Secure Wipe</name>
+    <unique-id>org.nyxos.thunar.wipe-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-wipe.sh %F</command>
+    <description>Permanently destroy the selected file(s) — irreversible</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>utilities-terminal</icon>
+    <name>NyxOS Sandbox Shell Here</name>
+    <unique-id>org.nyxos.thunar.sandbox-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-sandbox.sh %f</command>
+    <description>Open a Firejail-sandboxed terminal rooted at this folder</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <directories/>
+  </action>
+
+  <action>
+    <icon>document-properties</icon>
+    <name>NyxOS Strip Metadata</name>
+    <unique-id>org.nyxos.thunar.metadata-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-metadata.sh %F</command>
+    <description>Remove EXIF/GPS/author/timestamp metadata in place (mat2) — irreversible</description>
+    <patterns>*</patterns>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>document-properties</icon>
+    <name>NyxOS SHA-256 Checksum</name>
+    <unique-id>org.nyxos.thunar.checksum-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-checksum.sh %F</command>
+    <description>Show the SHA-256 checksum of the selected file(s)</description>
+    <patterns>*</patterns>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>dialog-password</icon>
+    <name>NyxOS Open As Root</name>
+    <unique-id>org.nyxos.thunar.root-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-root.sh %f</command>
+    <description>Open this location as root via polkit (audited, not a blanket sudo rule)</description>
+    <patterns>*</patterns>
+    <directories/>
+    <other-files/>
+  </action>
+
+  <action>
+    <icon>edit-copy</icon>
+    <name>NyxOS Copy Path</name>
+    <unique-id>org.nyxos.thunar.copy-path-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-copy-path.sh %f</command>
+    <description>Copy the exact selected path to the clipboard (does not resolve symlinks)</description>
+    <patterns>*</patterns>
+    <directories/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+</actions>

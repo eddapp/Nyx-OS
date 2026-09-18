@@ -1,0 +1,28 @@
+# Maintainer: NyxOS
+# Packages Thunar custom-action glue only — no compilation. Delegates the
+# actual privileged/destructive logic to nyx-wipe and nyx-isolation, both
+# separate packages this one depends on.
+pkgname=nyx-thunar-integration
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS Thunar context-menu integration (secure wipe, sandbox shell, metadata strip, checksum, root open, copy path)"
+arch=('any')
+license=('MIT')
+depends=('thunar' 'zenity' 'mat2' 'polkit' 'nyx-wipe' 'nyx-isolation')
+optdepends=('xclip: clipboard support for Copy Path' 'libnotify: desktop notifications on completion')
+
+_repo_root="$startdir/../../.."
+_thunar_dir="$_repo_root/install/thunar"
+
+package() {
+  install -Dm644 "$_thunar_dir/uca.xml" \
+    "$pkgdir/etc/xdg/Thunar/uca.xml"
+
+  install -Dm644 "$_thunar_dir/nyx-thunar-common.sh" \
+    "$pkgdir/usr/lib/nyx/thunar/nyx-thunar-common.sh"
+
+  for script in wipe sandbox metadata checksum root copy-path; do
+    install -Dm755 "$_thunar_dir/nyx-thunar-$script.sh" \
+      "$pkgdir/usr/lib/nyx/thunar/nyx-thunar-$script.sh"
+  done
+}

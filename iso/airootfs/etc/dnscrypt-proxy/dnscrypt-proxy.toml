@@ -1,0 +1,33 @@
+# NyxOS DNS layer — dnscrypt-proxy enforced as the only local resolver.
+# NetworkManager is configured (see /etc/NetworkManager/conf.d/dns.conf) to
+# never overwrite /etc/resolv.conf, which points at 127.0.0.1.
+
+listen_addresses = ['127.0.0.1:53']
+max_clients = 250
+
+ipv4_servers = true
+ipv6_servers = false
+dnscrypt_servers = true
+doh_servers = true
+
+require_dnssec = true
+force_tcp = false
+timeout = 5000
+keepalive = 30
+lb_strategy = 'p2'
+
+server_names = ['cloudflare', 'quad9-dnscrypt-ip4-filter-pri']
+
+cache = true
+cache_size = 4096
+cache_min_ttl = 2400
+cache_max_ttl = 86400
+cache_neg_min_ttl = 60
+cache_neg_max_ttl = 600
+
+[sources.'public-resolvers']
+  urls = ['https://raw.githubusercontent.com/DNSCrypt/dnscrypt-resolvers/master/v3/public-resolvers.md']
+  cache_file = 'public-resolvers.md'
+  minisign_key = 'RWDf14gYRPFbwlxLdKvmnUp0RIxrCWzTk4tK3zSzOxCLdYtxeSKQyGYS'
+  refresh_delay = 72
+  prefix = ''

@@ -1,0 +1,11 @@
+NAME="NyxOS"
+PRETTY_NAME="NyxOS"
+ID=nyxos
+ID_LIKE=arch
+BUILD_ID=rolling
+ANSI_COLOR="38;2;155;89;182"
+HOME_URL="https://nyxos.org"
+DOCUMENTATION_URL="https://nyxos.org/docs"
+SUPPORT_URL="https://nyxos.org"
+BUG_REPORT_URL="https://github.com/nyxos"
+LOGO=nyxos-logo

@@ -1,0 +1,187 @@
+//! Built-in NyxOS workflows. Small on purpose — each one composes existing,
+//! already-real daemon calls (see `executor.rs`) rather than introducing new
+//! privileged behaviour of its own.
+
+use crate::model::{Condition, DangerLevel, Step, Workflow, WorkflowCommand};
+
+const STATUS_ROLLBACK: &str = "Re-run the equivalent status command and compare against the prior state.";
+const IRREVERSIBLE_ROLLBACK: &str =
+    "No automated rollback exists for this step — restore network/service state manually if needed.";
+
+pub fn catalog() -> Vec<Workflow> {
+    vec![
+        enable_tor_with_verification(),
+        security_checkup(),
+        emergency_lockdown(),
+        kill_switch_drill(),
+    ]
+}
+
+pub fn find(id: &str) -> Option<Workflow> {
+    catalog().into_iter().find(|w| w.id == id)
+}
+
+fn enable_tor_with_verification() -> Workflow {
+    Workflow {
+        id: "enable-tor-with-verification",
+        description: "Start Tor, then verify DNS is actually enforced before declaring success.",
+        steps: vec![
+            Step {
+                description: "Start Tor",
+                cmd: WorkflowCommand::HealthTor { on: true },
+                condition: Condition::Always,
+                danger: DangerLevel::Low,
+                confirm: false,
+                rollback_hint: "Run `nyx-workflow run enable-tor-with-verification` again, or stop Tor via the dashboard.",
+            },
+            Step {
+                description: "Confirm Tor is reported active",
+                cmd: WorkflowCommand::HealthStatus,
+                condition: Condition::IfSuccess,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+            Step {
+                description: "Verify the DNS path is enforced and resolving",
+                cmd: WorkflowCommand::DnsStatus,
+                condition: Condition::IfSuccess,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: "If DNS reports Blocked or Degraded, Tor being active does not mean traffic is protected — check nyx-dns's detail message before trusting this route.",
+            },
+        ],
+    }
+}
+
+fn security_checkup() -> Workflow {
+    Workflow {
+        id: "security-checkup",
+        description: "Read-only posture check: package/manifest integrity, DNS enforcement, kill-switch/Tor state.",
+        steps: vec![
+            Step {
+                description: "Quick integrity verification (Nyx-critical packages + file manifest)",
+                cmd: WorkflowCommand::IntegrityVerify { quick: true },
+                condition: Condition::Always,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+            Step {
+                description: "DNS enforcement status",
+                cmd: WorkflowCommand::DnsStatus,
+                condition: Condition::Always,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+            Step {
+                description: "Kill switch / Tor / panic status",
+                cmd: WorkflowCommand::HealthStatus,
+                condition: Condition::Always,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+        ],
+    }
+}
+
+fn kill_switch_drill() -> Workflow {
+    Workflow {
+        id: "kill-switch-drill",
+        description: "Briefly raise the kill switch to Medium, verify it took, then restore Off. \
+                       Safe to run to confirm nyx-health's firewall control actually works.",
+        steps: vec![
+            Step {
+                description: "Explain what this drill does",
+                cmd: WorkflowCommand::Message(
+                    "Raising kill switch to Medium for a few seconds, then restoring Off.".to_string(),
+                ),
+                condition: Condition::Always,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+            Step {
+                description: "Raise kill switch to Medium",
+                cmd: WorkflowCommand::HealthKillSwitch { level: nyx_core::KillSwitchLevel::Medium },
+                condition: Condition::Always,
+                danger: DangerLevel::Medium,
+                confirm: false,
+                rollback_hint: "Run `nyx-workflow run kill-switch-drill` again, or set the kill switch to Off from the dashboard.",
+            },
+            Step {
+                description: "Confirm the level actually took (and note if it fell back to Soft)",
+                cmd: WorkflowCommand::HealthStatus,
+                condition: Condition::IfSuccess,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+            Step {
+                description: "nyx-health could not be reached to raise the kill switch",
+                cmd: WorkflowCommand::Message(
+                    "Drill aborted before touching the firewall — check that nyx-health is running.".to_string(),
+                ),
+                condition: Condition::IfFailure,
+                danger: DangerLevel::High,
+                confirm: false,
+                rollback_hint: "Nothing was changed; investigate nyx-health before retrying.",
+            },
+            Step {
+                description: "Restore kill switch to Off",
+                cmd: WorkflowCommand::HealthKillSwitch { level: nyx_core::KillSwitchLevel::Off },
+                condition: Condition::Always,
+                danger: DangerLevel::Low,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+            Step {
+                description: "Sanity-check system integrity while we're here",
+                cmd: WorkflowCommand::IntegrityStatus,
+                condition: Condition::Always,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+        ],
+    }
+}
+
+fn emergency_lockdown() -> Workflow {
+    Workflow {
+        id: "emergency-lockdown",
+        description: "Drop all traffic except loopback and stop Tor. One-way — only a nyx-health restart clears it.",
+        steps: vec![
+            Step {
+                description: "Operator confirmation",
+                cmd: WorkflowCommand::Confirm(
+                    "This will drop ALL network traffic except loopback and stop Tor. \
+                     Only restarting nyx-health clears it. Continue?"
+                        .to_string(),
+                ),
+                condition: Condition::Always,
+                danger: DangerLevel::Critical,
+                confirm: false,
+                rollback_hint: "Declining this step does nothing — nothing has run yet.",
+            },
+            Step {
+                description: "Trigger panic lockdown",
+                cmd: WorkflowCommand::HealthPanic,
+                condition: Condition::IfSuccess,
+                danger: DangerLevel::Critical,
+                confirm: false,
+                rollback_hint: IRREVERSIBLE_ROLLBACK,
+            },
+            Step {
+                description: "Confirm lockdown took effect",
+                cmd: WorkflowCommand::HealthStatus,
+                condition: Condition::IfSuccess,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+        ],
+    }
+}

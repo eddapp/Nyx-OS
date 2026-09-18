@@ -1,0 +1,16 @@
+[Unit]
+Description=NyxOS DNS enforcement/leak-verification daemon
+After=network-pre.target dbus.service dnscrypt-proxy.service
+Wants=network-pre.target
+Requisite=dnscrypt-proxy.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nyx-dns
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=nyx
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+# NyxOS default Tor config. Not started at boot — nyx-tor/nyx-health own its
+# lifecycle. SocksPort is only reachable from localhost.
+SocksPort 127.0.0.1:9050
+ControlPort 127.0.0.1:9051
+CookieAuthentication 1
+AvoidDiskWrites 1

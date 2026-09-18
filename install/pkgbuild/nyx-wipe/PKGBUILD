@@ -1,0 +1,26 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-wipe so three levels up is the repo root.
+#
+# nyx-wipe is a one-shot privileged CLI, not a daemon — no .service unit to
+# install. See core/crates/nyx-wipe/src/main.rs for why it isn't resident.
+pkgname=nyx-wipe
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS anti-forensics cleanup CLI (irreversible — run 'plan' before 'execute --yes')"
+arch=('x86_64')
+license=('MIT')
+depends=('systemd')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-wipe --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-wipe" \
+    "$pkgdir/usr/bin/nyx-wipe"
+}
