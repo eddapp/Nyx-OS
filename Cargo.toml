@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "core/crates/nyx-core",
     "core/crates/nyx-health",
+    "core/crates/nyx-vpn",
+    "core/crates/nyx-identity",
     "core/crates/nyx-dns",
     "core/crates/nyx-integrity",
     "core/crates/nyx-wipe",

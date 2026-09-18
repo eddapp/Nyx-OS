@@ -48,6 +48,7 @@ dnscrypt-proxy
 
 # --- NyxOS control layer (built from install/pkgbuild/, see build.sh) ---
 nyx-health
+nyx-vpn
 nyx-dns
 nyx-integrity
 nyx-wipe
@@ -100,3 +101,5 @@ xterm
 ent
 gnupg
 xclip
+ethtool
+usbutils

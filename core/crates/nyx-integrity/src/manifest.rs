@@ -15,12 +15,18 @@ use std::path::Path;
 /// (a server profile has no `nyx-dashboard`, for instance).
 pub const MANIFEST_TARGETS: &[&str] = &[
     "/usr/bin/nyx-health",
+    "/usr/bin/nyx-vpn",
     "/usr/bin/nyx-dns",
     "/usr/bin/nyx-integrity",
+    "/usr/bin/nyx-wipe",
+    "/usr/bin/nyx-isolation",
+    "/usr/bin/nyx-workflow",
     "/usr/bin/nyx-dashboard",
     "/usr/lib/systemd/system/nyx-health.service",
+    "/usr/lib/systemd/system/nyx-vpn.service",
     "/usr/lib/systemd/system/nyx-dns.service",
     "/usr/lib/systemd/system/nyx-integrity.service",
+    "/etc/xdg/Thunar/uca.xml",
     "/etc/nftables.conf",
     "/etc/tor/torrc",
     "/etc/dnscrypt-proxy/dnscrypt-proxy.toml",

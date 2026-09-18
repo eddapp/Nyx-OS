@@ -8,9 +8,10 @@ pub mod protocol;
 pub use error::{NyxError, NyxResult};
 pub use output::{NyxOutput, Status};
 pub use protocol::{
-    DnsCommand, DnsReport, HealthCommand, HealthState, IntegrityCommand, IntegrityReport,
-    KillSwitchLevel, SecurityState, Toggle, VpnCommand, VpnProfile, VpnProfileList, VpnProtocol,
-    VpnReport, WipeReport, WipeTarget,
+    DeviceModule, DeviceRadio, DevicesCommand, DevicesReport, DnsCommand, DnsReport,
+    HealthCommand, HealthState, IdentityCommand, IdentityReport, IntegrityCommand,
+    IntegrityReport, InterfaceIdentity, KillSwitchLevel, SecurityState, Toggle, VpnCommand,
+    VpnProfile, VpnProtocol, VpnReport, WipeReport, WipeTarget,
 };
 
 /// Path of the nyx-health control socket. Owned by root, group `wheel`,
@@ -34,3 +35,16 @@ pub const INTEGRITY_MANIFEST_PATH: &str = "/etc/nyx/integrity.manifest";
 /// Path of the nyx-vpn control socket. Same trust boundary as
 /// [`HEALTH_SOCKET`]: owned by root, group `wheel`, mode 0660.
 pub const VPN_SOCKET: &str = "/run/nyx/vpn.sock";
+
+/// Path of the nyx-identity control socket. Same trust boundary as
+/// [`HEALTH_SOCKET`].
+pub const IDENTITY_SOCKET: &str = "/run/nyx/identity.sock";
+
+/// Where nyx-identity persists the pre-randomization hostname/timezone, so
+/// `RestoreHostname`/`RestoreTimezone` have something real to go back to
+/// even across a daemon restart. Root-owned.
+pub const IDENTITY_STATE_PATH: &str = "/etc/nyx/identity-state.json";
+
+/// Path of the nyx-devices control socket. Same trust boundary as
+/// [`HEALTH_SOCKET`].
+pub const DEVICES_SOCKET: &str = "/run/nyx/devices.sock";

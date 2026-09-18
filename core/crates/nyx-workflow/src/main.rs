@@ -8,7 +8,8 @@ mod client;
 mod executor;
 mod model;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use nyx_core::VpnProtocol;
 
 #[derive(Parser)]
 #[command(name = "nyx-workflow", about = "NyxOS multi-step security workflow runner")]
@@ -24,7 +25,50 @@ enum Cmd {
     /// Run a workflow by id.
     Run {
         id: String,
+        /// Required by `connect-vpn-with-verification`.
+        #[arg(long, value_enum)]
+        protocol: Option<ProtocolArg>,
+        /// Required by `connect-vpn-with-verification`.
+        #[arg(long)]
+        profile: Option<String>,
     },
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+enum ProtocolArg {
+    Wireguard,
+    Openvpn,
+}
+
+impl From<ProtocolArg> for VpnProtocol {
+    fn from(p: ProtocolArg) -> Self {
+        match p {
+            ProtocolArg::Wireguard => VpnProtocol::WireGuard,
+            ProtocolArg::Openvpn => VpnProtocol::OpenVpn,
+        }
+    }
+}
+
+fn run_and_report(workflow: model::Workflow) {
+    println!("=== {} ===\n{}\n", workflow.id, workflow.description);
+    let report = executor::run(&workflow);
+
+    let failed = report.results.iter().filter(|r| r.ran && !r.ok).count();
+    println!("\n--- {} ---", report.id);
+    for result in &report.results {
+        let mark = if !result.ran {
+            "skip"
+        } else if result.ok {
+            " ok "
+        } else {
+            "FAIL"
+        };
+        println!("[{mark}] {} — {}", result.description, result.message);
+    }
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
 }
 
 fn main() {
@@ -36,8 +80,26 @@ fn main() {
             for workflow in catalog::catalog() {
                 println!("{}\t{}", workflow.id, workflow.description);
             }
+            println!(
+                "{}\t{}",
+                catalog::PARAMETRIZED_WORKFLOW_ID,
+                catalog::PARAMETRIZED_WORKFLOW_DESCRIPTION
+            );
         }
-        Cmd::Run { id } => {
+        Cmd::Run { id, protocol, profile } => {
+            if id == catalog::PARAMETRIZED_WORKFLOW_ID {
+                let (Some(protocol), Some(profile)) = (protocol, profile) else {
+                    nyx_core::output::print_error(
+                        "nyx-workflow",
+                        "run",
+                        &format!("{} requires --protocol and --profile", catalog::PARAMETRIZED_WORKFLOW_ID),
+                    );
+                    std::process::exit(1);
+                };
+                run_and_report(catalog::connect_vpn_with_verification(protocol.into(), profile));
+                return;
+            }
+
             let Some(workflow) = catalog::find(&id) else {
                 nyx_core::output::print_error(
                     "nyx-workflow",
@@ -46,26 +108,7 @@ fn main() {
                 );
                 std::process::exit(1);
             };
-
-            println!("=== {} ===\n{}\n", workflow.id, workflow.description);
-            let report = executor::run(&workflow);
-
-            let failed = report.results.iter().filter(|r| r.ran && !r.ok).count();
-            println!("\n--- {} ---", report.id);
-            for result in &report.results {
-                let mark = if !result.ran {
-                    "skip"
-                } else if result.ok {
-                    " ok "
-                } else {
-                    "FAIL"
-                };
-                println!("[{mark}] {} — {}", result.description, result.message);
-            }
-
-            if failed > 0 {
-                std::process::exit(1);
-            }
+            run_and_report(workflow);
         }
     }
 }

@@ -1,0 +1,15 @@
+[Unit]
+Description=NyxOS identity manager (MAC/hostname/timezone/IPv6)
+After=network-pre.target dbus.service NetworkManager.service
+Wants=network-pre.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nyx-identity
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=nyx
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

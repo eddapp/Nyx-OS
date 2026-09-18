@@ -3,11 +3,17 @@
 //! privileged behaviour of its own.
 
 use crate::model::{Condition, DangerLevel, Step, Workflow, WorkflowCommand};
+use nyx_core::VpnProtocol;
 
 const STATUS_ROLLBACK: &str = "Re-run the equivalent status command and compare against the prior state.";
 const IRREVERSIBLE_ROLLBACK: &str =
     "No automated rollback exists for this step — restore network/service state manually if needed.";
 
+/// `connect-vpn-with-verification` needs a protocol+profile at run time, so
+/// it isn't in here with a real target — `main.rs` builds it directly via
+/// [`connect_vpn_with_verification`] when the operator supplies both. It's
+/// still listed by `list_ids_and_descriptions` below so `nyx-workflow list`
+/// shows it.
 pub fn catalog() -> Vec<Workflow> {
     vec![
         enable_tor_with_verification(),
@@ -19,6 +25,52 @@ pub fn catalog() -> Vec<Workflow> {
 
 pub fn find(id: &str) -> Option<Workflow> {
     catalog().into_iter().find(|w| w.id == id)
+}
+
+pub const PARAMETRIZED_WORKFLOW_ID: &str = "connect-vpn-with-verification";
+pub const PARAMETRIZED_WORKFLOW_DESCRIPTION: &str =
+    "Connect a specific VPN profile, then verify DNS is still enforced and the tunnel is really \
+     carrying traffic. Needs --protocol and --profile.";
+
+pub fn connect_vpn_with_verification(protocol: VpnProtocol, profile: String) -> Workflow {
+    Workflow {
+        id: PARAMETRIZED_WORKFLOW_ID,
+        description: PARAMETRIZED_WORKFLOW_DESCRIPTION,
+        steps: vec![
+            Step {
+                description: "Connect the requested VPN profile",
+                cmd: WorkflowCommand::VpnConnect { protocol, profile: profile.clone() },
+                condition: Condition::Always,
+                danger: DangerLevel::Low,
+                confirm: false,
+                rollback_hint: "Run `nyx-workflow run` again, or disconnect via the dashboard/`nyx-vpn`.",
+            },
+            Step {
+                description: "Confirm the tunnel is actually up (handshake/route, not just the command exit code)",
+                cmd: WorkflowCommand::VpnStatus,
+                condition: Condition::IfSuccess,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: STATUS_ROLLBACK,
+            },
+            Step {
+                description: "Verify DNS is still enforced over the new route",
+                cmd: WorkflowCommand::DnsStatus,
+                condition: Condition::IfSuccess,
+                danger: DangerLevel::Safe,
+                confirm: false,
+                rollback_hint: "If DNS reports Blocked/Degraded, disconnect and investigate before trusting this route.",
+            },
+            Step {
+                description: "DNS check failed — disconnect rather than trust a route that couldn't be verified",
+                cmd: WorkflowCommand::VpnDisconnect,
+                condition: Condition::IfFailure,
+                danger: DangerLevel::Medium,
+                confirm: false,
+                rollback_hint: "Reconnect manually once the underlying DNS/route issue is understood.",
+            },
+        ],
+    }
 }
 
 fn enable_tor_with_verification() -> Workflow {

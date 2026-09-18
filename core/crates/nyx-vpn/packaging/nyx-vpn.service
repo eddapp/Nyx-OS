@@ -1,0 +1,16 @@
+[Unit]
+Description=NyxOS VPN manager (WireGuard/OpenVPN lifecycle and verification)
+After=network-pre.target dbus.service
+Wants=network-pre.target
+Before=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nyx-vpn
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=nyx
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

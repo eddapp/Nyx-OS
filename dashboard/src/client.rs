@@ -1,18 +1,21 @@
-//! Blocking client for the nyx-health control socket. One line of JSON in,
-//! one line of JSON out — called from a background thread so it never blocks
-//! the GTK main loop.
+//! Blocking clients for the Nyx daemon sockets. One line of JSON in, one
+//! line of JSON out — always called from a background thread so it never
+//! blocks the GTK main loop.
 
-use nyx_core::{HealthCommand, HealthState, NyxOutput};
+use nyx_core::{HealthCommand, HealthState, NyxOutput, VpnCommand, VpnReport, HEALTH_SOCKET, VPN_SOCKET};
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 
-pub fn send(cmd: HealthCommand) -> Result<NyxOutput<HealthState>, String> {
-    let mut stream =
-        UnixStream::connect(nyx_core::HEALTH_SOCKET).map_err(|e| format!("connect: {e}"))?;
+fn call<C: Serialize, R: DeserializeOwned>(socket: &str, cmd: &C) -> Result<R, String> {
+    let mut stream = UnixStream::connect(socket).map_err(|e| format!("connect {socket}: {e}"))?;
 
-    let mut line = serde_json::to_string(&cmd).map_err(|e| e.to_string())?;
+    let mut line = serde_json::to_string(cmd).map_err(|e| e.to_string())?;
     line.push('\n');
-    stream.write_all(line.as_bytes()).map_err(|e| format!("send: {e}"))?;
+    stream
+        .write_all(line.as_bytes())
+        .map_err(|e| format!("send: {e}"))?;
 
     let mut response = String::new();
     BufReader::new(stream)
@@ -20,4 +23,12 @@ pub fn send(cmd: HealthCommand) -> Result<NyxOutput<HealthState>, String> {
         .map_err(|e| format!("recv: {e}"))?;
 
     serde_json::from_str(&response).map_err(|e| format!("bad response: {e}"))
+}
+
+pub fn send(cmd: HealthCommand) -> Result<NyxOutput<HealthState>, String> {
+    call(HEALTH_SOCKET, &cmd)
+}
+
+pub fn send_vpn(cmd: VpnCommand) -> Result<NyxOutput<VpnReport>, String> {
+    call(VPN_SOCKET, &cmd)
 }

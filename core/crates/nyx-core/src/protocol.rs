@@ -245,10 +245,10 @@ pub struct VpnReport {
     pub default_route_via_vpn: bool,
     pub state: SecurityState,
     pub detail: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
-pub struct VpnProfileList {
+    /// Only populated in response to `VpnCommand::List`; empty otherwise.
+    /// Kept on this one report type rather than a separate response shape
+    /// so every `VpnCommand` can share the same `NyxOutput<VpnReport>`
+    /// wire type.
     pub profiles: Vec<VpnProfile>,
 }
 
@@ -266,4 +266,139 @@ pub struct WipeReport {
     /// Non-fatal caveats, e.g. "target is SSD/NVMe — overwritten bytes are
     /// not guaranteed erased at the flash-translation-layer level".
     pub warnings: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// nyx-identity wire protocol — socket at `IDENTITY_SOCKET`.
+//
+// Deliberately does NOT include "sync timezone to exit IP" or "decoy
+// traffic" — both would mean this daemon making its own outbound network
+// calls (to a geolocation service, or to generate cover traffic) by
+// default, which is a real privacy/dependency trade-off this project isn't
+// making silently. Randomize/restore/show only, for values that can be
+// changed and verified locally.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum IdentityCommand {
+    /// Report current hostname, timezone, IPv6 posture, and every
+    /// non-loopback interface's current MAC — re-read live each call.
+    Status,
+    /// Set `interface`'s cloned MAC to a fresh random address via
+    /// NetworkManager (`cloned-mac-address random`), then reactivate the
+    /// connection.
+    RandomizeMac { interface: String },
+    /// Set `interface`'s cloned MAC back to the hardware's permanent
+    /// address (`cloned-mac-address permanent`) and reactivate.
+    RestoreMac { interface: String },
+    /// Set the hostname to a freshly generated one. The pre-randomization
+    /// hostname is captured the first time this runs (if not already
+    /// captured) so `RestoreHostname` has something real to go back to.
+    RandomizeHostname,
+    RestoreHostname,
+    /// Pick a random IANA timezone from the system's own zoneinfo list.
+    /// The original is captured the first time this runs, same as hostname.
+    RandomizeTimezone,
+    RestoreTimezone,
+    /// System-wide IPv6 on/off via sysctl, persisted under
+    /// `/etc/sysctl.d/` so it survives reboot.
+    SetIpv6 { enabled: bool },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct InterfaceIdentity {
+    pub interface: String,
+    pub mac_address: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct IdentityReport {
+    pub hostname: Option<String>,
+    /// The hostname captured before the first `RandomizeHostname`, if any
+    /// randomization has happened yet this install.
+    pub original_hostname: Option<String>,
+    pub timezone: Option<String>,
+    pub original_timezone: Option<String>,
+    pub ipv6_enabled: Option<bool>,
+    pub interfaces: Vec<InterfaceIdentity>,
+    pub detail: String,
+}
+
+// ---------------------------------------------------------------------------
+// nyx-devices wire protocol — socket at `DEVICES_SOCKET`.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceRadio {
+    /// `nmcli radio wifi` — the application-layer radio switch NetworkManager
+    /// itself owns, rather than a raw `rfkill`, so NM's own state stays
+    /// consistent.
+    Wifi,
+    /// `rfkill block/unblock bluetooth` — there's no NetworkManager-level
+    /// equivalent for Bluetooth.
+    Bluetooth,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceModule {
+    /// `uvcvideo` — covers USB Video Class webcams, not every webcam ever
+    /// made, but the large majority on a modern laptop/USB camera.
+    Webcam,
+    /// `usb_storage` — mass-storage USB devices only. USB HID (keyboards,
+    /// mice) use a different driver and keep working.
+    UsbStorage,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum DevicesCommand {
+    /// Report everything — re-probed live each call: radio states, module
+    /// states, USBGuard's actual configured policy (not just "is it
+    /// running"), connected USB devices, and LUKS-encrypted block devices.
+    Status,
+    SetRadio { radio: DeviceRadio, on: bool },
+    /// `enabled: false` also writes a modprobe blacklist file so the
+    /// module doesn't come back on the next device (re)plug or reboot;
+    /// `true` removes that blacklist file and reloads the module.
+    SetModule { module: DeviceModule, enabled: bool },
+    /// Mutes/unmutes the default PipeWire audio source via `wpctl` — there
+    /// is no kernel module to unload without silencing every microphone
+    /// input path at once, so this is done at the audio-server level.
+    SetMicrophone { enabled: bool },
+    SetUsbGuard { enabled: bool },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DevicesReport {
+    pub wifi_enabled: Option<bool>,
+    pub bluetooth_enabled: Option<bool>,
+    pub webcam_enabled: Option<bool>,
+    pub microphone_enabled: Option<bool>,
+    pub usb_storage_enabled: Option<bool>,
+    pub usbguard_active: Option<bool>,
+    /// True if USBGuard's own configured `ImplicitPolicyTarget` is `block`
+    /// — i.e. unknown devices are refused by default, not merely that the
+    /// service happens to be running.
+    pub usbguard_default_deny: Option<bool>,
+    /// True if the filesystem mounted at `/` sits on a `crypto_LUKS`
+    /// device — a real block-device-topology check, not a settings flag.
+    pub encrypted_root: Option<bool>,
+    /// One line per `crypto_LUKS`-typed block device found by `lsblk`.
+    pub luks_devices: Vec<String>,
+    /// One line per USB device from `lsusb`.
+    pub usb_devices: Vec<String>,
+    /// Raw rule lines from USBGuard's own policy file
+    /// (`/etc/usbguard/rules.conf`) — "allow"-prefixed lines are its
+    /// whitelist.
+    pub usbguard_policy: Vec<String>,
+    /// Recent USBGuard connect/disconnect journal lines, if any.
+    pub usbguard_history: Vec<String>,
+    /// Summarizes USB authorization posture specifically: USBGuard active
+    /// and default-deny means Protected. Radio/webcam/mic toggles are plain
+    /// user settings and don't factor into this.
+    pub state: SecurityState,
+    pub detail: String,
 }

@@ -15,7 +15,7 @@ WORK_DIR="$PROFILE_DIR/work"
 OUT_DIR="$PROFILE_DIR/out"
 BUILD_PACMAN_CONF="$PROFILE_DIR/pacman.conf.local"
 BLACKARCH_KEY="4345771566D76038C7FEB43863EC0ADBEA87E4E3"
-NYX_PACKAGES=(nyx-health nyx-dns nyx-integrity nyx-wipe nyx-isolation nyx-workflow nyx-thunar-integration nyx-dashboard)
+NYX_PACKAGES=(nyx-health nyx-vpn nyx-dns nyx-integrity nyx-wipe nyx-isolation nyx-workflow nyx-thunar-integration nyx-dashboard)
 
 [[ "$EUID" -ne 0 ]] || { echo "do not run as root — see the header comment" >&2; exit 1; }
 

@@ -6,7 +6,7 @@
 //! don't already expose, which is the whole point of routing everything
 //! through the control plane instead of ad-hoc scripts.
 
-use nyx_core::KillSwitchLevel;
+use nyx_core::{KillSwitchLevel, VpnProtocol};
 
 #[derive(Clone)]
 pub enum WorkflowCommand {
@@ -17,6 +17,9 @@ pub enum WorkflowCommand {
     DnsStatus,
     IntegrityStatus,
     IntegrityVerify { quick: bool },
+    VpnStatus,
+    VpnConnect { protocol: VpnProtocol, profile: String },
+    VpnDisconnect,
     /// Purely local — print informational text, always succeeds.
     Message(String),
     /// Purely local — block for an interactive yes/no; failing this step

@@ -1,0 +1,25 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-identity so three levels up is the repo root.
+pkgname=nyx-identity
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS identity manager — MAC/hostname/timezone randomization, IPv6 control"
+arch=('x86_64')
+license=('MIT')
+depends=('networkmanager' 'systemd' 'procps-ng')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-identity --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-identity" \
+    "$pkgdir/usr/bin/nyx-identity"
+  install -Dm644 "$_repo_root/core/crates/nyx-identity/packaging/nyx-identity.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-identity.service"
+}

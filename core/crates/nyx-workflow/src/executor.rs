@@ -2,7 +2,8 @@ use crate::client;
 use crate::model::{Condition, Workflow, WorkflowCommand};
 use nyx_core::{
     DnsCommand, DnsReport, HealthCommand, HealthState, IntegrityCommand, IntegrityReport,
-    NyxOutput, Status, Toggle, DNS_SOCKET, HEALTH_SOCKET, INTEGRITY_SOCKET,
+    NyxOutput, Status, Toggle, VpnCommand, VpnReport, DNS_SOCKET, HEALTH_SOCKET,
+    INTEGRITY_SOCKET, VPN_SOCKET,
 };
 use std::io::Write;
 
@@ -67,6 +68,31 @@ fn execute(cmd: &WorkflowCommand) -> (bool, String) {
             match client::call::<IntegrityCommand, NyxOutput<IntegrityReport>>(
                 INTEGRITY_SOCKET,
                 &IntegrityCommand::Verify { quick: *quick },
+            ) {
+                Ok(out) => (matches!(out.status, Status::Ok), out.message),
+                Err(e) => (false, e),
+            }
+        }
+        WorkflowCommand::VpnStatus => {
+            match client::call::<VpnCommand, NyxOutput<VpnReport>>(VPN_SOCKET, &VpnCommand::Status)
+            {
+                Ok(out) => (matches!(out.status, Status::Ok), out.message),
+                Err(e) => (false, e),
+            }
+        }
+        WorkflowCommand::VpnConnect { protocol, profile } => {
+            match client::call::<VpnCommand, NyxOutput<VpnReport>>(
+                VPN_SOCKET,
+                &VpnCommand::Connect { protocol: *protocol, profile: profile.clone() },
+            ) {
+                Ok(out) => (matches!(out.status, Status::Ok | Status::Warning), out.message),
+                Err(e) => (false, e),
+            }
+        }
+        WorkflowCommand::VpnDisconnect => {
+            match client::call::<VpnCommand, NyxOutput<VpnReport>>(
+                VPN_SOCKET,
+                &VpnCommand::Disconnect,
             ) {
                 Ok(out) => (matches!(out.status, Status::Ok), out.message),
                 Err(e) => (false, e),
