@@ -1,0 +1,25 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-devices so three levels up is the repo root.
+pkgname=nyx-devices
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS device control — WiFi/Bluetooth radios, webcam/mic/USB-storage, USBGuard"
+arch=('x86_64')
+license=('MIT')
+depends=('networkmanager' 'util-linux' 'kmod' 'wireplumber' 'usbutils' 'usbguard' 'systemd')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-devices --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-devices" \
+    "$pkgdir/usr/bin/nyx-devices"
+  install -Dm644 "$_repo_root/core/crates/nyx-devices/packaging/nyx-devices.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-devices.service"
+}

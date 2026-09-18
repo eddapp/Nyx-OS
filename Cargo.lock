@@ -838,6 +838,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyx-devices"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nix",
+ "nyx-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "zbus",
+]
+
+[[package]]
 name = "nyx-dns"
 version = "0.1.0"
 dependencies = [

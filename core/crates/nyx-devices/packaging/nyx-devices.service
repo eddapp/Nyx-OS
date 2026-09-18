@@ -1,0 +1,14 @@
+[Unit]
+Description=NyxOS device control (radios, webcam, microphone, USB, USBGuard)
+After=dbus.service NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nyx-devices
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=nyx
+RuntimeDirectoryMode=0750
+
+[Install]
+WantedBy=multi-user.target

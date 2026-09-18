@@ -16,6 +16,8 @@ use std::path::Path;
 pub const MANIFEST_TARGETS: &[&str] = &[
     "/usr/bin/nyx-health",
     "/usr/bin/nyx-vpn",
+    "/usr/bin/nyx-identity",
+    "/usr/bin/nyx-devices",
     "/usr/bin/nyx-dns",
     "/usr/bin/nyx-integrity",
     "/usr/bin/nyx-wipe",
@@ -24,6 +26,8 @@ pub const MANIFEST_TARGETS: &[&str] = &[
     "/usr/bin/nyx-dashboard",
     "/usr/lib/systemd/system/nyx-health.service",
     "/usr/lib/systemd/system/nyx-vpn.service",
+    "/usr/lib/systemd/system/nyx-identity.service",
+    "/usr/lib/systemd/system/nyx-devices.service",
     "/usr/lib/systemd/system/nyx-dns.service",
     "/usr/lib/systemd/system/nyx-integrity.service",
     "/etc/xdg/Thunar/uca.xml",
