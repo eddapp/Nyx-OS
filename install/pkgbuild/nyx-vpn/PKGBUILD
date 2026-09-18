@@ -21,6 +21,8 @@ license=('MIT')
 #   src/cloak.rs's module doc) — only ck-client is actually driven here.
 # mieru: NyxOS-native (install/pkgbuild/mieru), not on the AUR at all —
 #   prebuilt client binary from upstream's own GitHub Releases.
+# curl: FetchFreeProvider's real outbound HTTPS calls to VPN Gate/Riseup's
+#   public APIs.
 depends=(
     'wireguard-tools' 'openvpn' 'iproute2' 'systemd'
     'amneziawg-tools' 'amneziawg-dkms'
@@ -30,6 +32,7 @@ depends=(
     'badvpn'
     'cloak-obfuscation-bin'
     'mieru'
+    'curl'
 )
 makedepends=('cargo')
 

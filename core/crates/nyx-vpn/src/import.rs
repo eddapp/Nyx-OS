@@ -174,7 +174,39 @@ pub(crate) fn profile_dir_and_ext(protocol: VpnProtocol) -> (&'static str, &'sta
         VpnProtocol::Shadowsocks => (crate::shadowsocks::PROFILE_DIR, "json"),
         VpnProtocol::Hysteria2 => (crate::hysteria::PROFILE_DIR, "yaml"),
         VpnProtocol::Socks5 => (crate::dante::PROFILE_DIR, "conf"),
+        VpnProtocol::Mieru => (crate::mieru::PROFILE_DIR, "json"),
     }
+}
+
+/// A real mieru client config's top level needs a non-empty `profiles[]`
+/// array, an `activeProfile` naming one of them, and that named profile
+/// needs real `user.name`/`user.password` and a non-empty `servers[]` —
+/// the same fields `mieru.rs`'s own `up()` needs present to run `mieru run`
+/// against this file at all (see mieru's real `client-install.md`-documented
+/// config shape).
+fn validate_mieru(contents: &str) -> Result<(), String> {
+    let value: serde_json::Value =
+        serde_json::from_str(contents).map_err(|e| format!("not valid JSON: {e}"))?;
+    let profiles = value.get("profiles").and_then(|v| v.as_array()).ok_or("no profiles[] array")?;
+    if profiles.is_empty() {
+        return Err("profiles[] is empty".to_string());
+    }
+    let active_name = value.get("activeProfile").and_then(|v| v.as_str()).ok_or("no activeProfile")?;
+    let active = profiles
+        .iter()
+        .find(|p| p.get("profileName").and_then(|v| v.as_str()) == Some(active_name))
+        .ok_or_else(|| format!("activeProfile '{active_name}' not found in profiles[]"))?;
+    if active.get("user").and_then(|u| u.get("name")).and_then(|v| v.as_str()).is_none() {
+        return Err("active profile missing user.name".to_string());
+    }
+    if active.get("user").and_then(|u| u.get("password")).and_then(|v| v.as_str()).is_none() {
+        return Err("active profile missing user.password".to_string());
+    }
+    let servers = active.get("servers").and_then(|v| v.as_array()).ok_or("active profile has no servers[]")?;
+    if servers.is_empty() {
+        return Err("active profile's servers[] is empty".to_string());
+    }
+    Ok(())
 }
 
 /// Validate `contents` against `protocol`'s real, documented config shape,
@@ -193,6 +225,7 @@ pub fn import_profile(protocol: VpnProtocol, name: &str, contents: &str) -> NyxR
         VpnProtocol::Shadowsocks => validate_shadowsocks(contents),
         VpnProtocol::Hysteria2 => validate_hysteria(contents),
         VpnProtocol::Socks5 => validate_socks5(contents),
+        VpnProtocol::Mieru => validate_mieru(contents),
     };
     validation.map_err(|e| NyxError::Config(format!("profile '{name}' rejected for {protocol:?}: {e}")))?;
 

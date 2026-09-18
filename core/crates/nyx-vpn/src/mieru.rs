@@ -55,7 +55,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 use zbus::Connection;
 
-const PROFILE_DIR: &str = "/etc/nyx/mieru";
+pub(crate) const PROFILE_DIR: &str = "/etc/nyx/mieru";
 
 fn unit_name(profile: &str) -> String {
     format!("nyx-vpn-mieru@{profile}.service")
