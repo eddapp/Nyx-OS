@@ -1,0 +1,21 @@
+[Unit]
+Description=NyxOS system/network telemetry (CPU, RAM, disk, network throughput)
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/nyx-telemetry
+Restart=on-failure
+RestartSec=2
+
+# Every value this daemon reports comes from /proc or statvfs, both
+# world-readable already — it does not need root, so it doesn't get root.
+# systemd creates and owns RuntimeDirectory for the dynamic user.
+DynamicUser=yes
+RuntimeDirectory=nyx-telemetry
+RuntimeDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

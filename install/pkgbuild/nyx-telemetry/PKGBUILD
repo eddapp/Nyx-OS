@@ -1,0 +1,25 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-telemetry so three levels up is the repo root.
+pkgname=nyx-telemetry
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS system/network telemetry — real /proc + statvfs stats, no privilege needed"
+arch=('x86_64')
+license=('MIT')
+depends=('systemd')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-telemetry --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-telemetry" \
+    "$pkgdir/usr/bin/nyx-telemetry"
+  install -Dm644 "$_repo_root/core/crates/nyx-telemetry/packaging/nyx-telemetry.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-telemetry.service"
+}

@@ -8,10 +8,11 @@ pub mod protocol;
 pub use error::{NyxError, NyxResult};
 pub use output::{NyxOutput, Status};
 pub use protocol::{
-    DeviceModule, DeviceRadio, DevicesCommand, DevicesReport, DnsCommand, DnsReport,
-    HealthCommand, HealthState, IdentityCommand, IdentityReport, IntegrityCommand,
-    IntegrityReport, InterfaceIdentity, KillSwitchLevel, SecurityState, Toggle, VpnCommand,
-    VpnProfile, VpnProtocol, VpnReport, WipeReport, WipeTarget,
+    CpuTelemetry, DeviceModule, DeviceRadio, DevicesCommand, DevicesReport, DiskTelemetry,
+    DnsCommand, DnsReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
+    IntegrityCommand, IntegrityReport, InterfaceIdentity, KillSwitchLevel,
+    MemoryTelemetry, NetworkInterfaceTelemetry, SecurityState, TelemetryCommand, TelemetryReport,
+    Toggle, VpnCommand, VpnProfile, VpnProtocol, VpnReport, WipeReport, WipeTarget,
 };
 
 /// Path of the nyx-health control socket. Owned by root, group `wheel`,
@@ -48,3 +49,10 @@ pub const IDENTITY_STATE_PATH: &str = "/etc/nyx/identity-state.json";
 /// Path of the nyx-devices control socket. Same trust boundary as
 /// [`HEALTH_SOCKET`].
 pub const DEVICES_SOCKET: &str = "/run/nyx/devices.sock";
+
+/// Path of the nyx-telemetry control socket. Deliberately NOT under
+/// `/run/nyx` — that directory is root:wheel 0750, and this daemon runs
+/// unprivileged (`DynamicUser=yes`) with no reason to share a runtime
+/// directory it can't write to. World-readable: CPU/RAM/network numbers
+/// aren't a security boundary.
+pub const TELEMETRY_SOCKET: &str = "/run/nyx-telemetry/telemetry.sock";

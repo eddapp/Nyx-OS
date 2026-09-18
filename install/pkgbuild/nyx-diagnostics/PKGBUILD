@@ -1,0 +1,26 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-diagnostics so three levels up is the repo root.
+#
+# nyx-diagnostics is a one-shot, unprivileged CLI, not a daemon — it only
+# reads other daemons' sockets and runs ordinary unprivileged tools.
+pkgname=nyx-diagnostics
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS network diagnostics — aggregates live daemon state plus ping/traceroute/route checks"
+arch=('x86_64')
+license=('MIT')
+depends=('iproute2' 'iputils' 'traceroute' 'curl')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-diagnostics --target-dir "$srcdir/target"
+}
+
+package() {
+  install -Dm755 "$srcdir/target/release/nyx-diagnostics" \
+    "$pkgdir/usr/bin/nyx-diagnostics"
+}

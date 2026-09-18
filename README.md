@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/nyx-banner.png" width="720" alt="NyxOS — privacy-first Arch-based OS" />
+</p>
+
 # NyxOS
 
 ### A hardened, privacy-focused Linux operating system built on Arch Linux.
@@ -999,6 +1003,10 @@ Individual third-party components may be distributed under their own licenses.
 * **Kodachi OS:** https://github.com/WMAL/kodachios
 
 ---
+
+<p align="center">
+  <img src="assets/nyx-logo.png" width="220" alt="NyxOS logo" />
+</p>
 
 ## NyxOS
 

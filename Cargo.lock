@@ -852,6 +852,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyx-diagnostics"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "nyx-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nyx-dns"
 version = "0.1.0"
 dependencies = [
@@ -916,6 +926,19 @@ dependencies = [
  "nyx-core",
  "serde",
  "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "nyx-telemetry"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "nix",
+ "nyx-core",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 

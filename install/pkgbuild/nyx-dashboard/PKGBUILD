@@ -22,4 +22,6 @@ package() {
     "$pkgdir/usr/bin/nyx-dashboard"
   install -Dm644 "$_repo_root/dashboard/packaging/org.nyxos.Dashboard.desktop" \
     "$pkgdir/usr/share/applications/org.nyxos.Dashboard.desktop"
+  install -Dm644 "$_repo_root/dashboard/packaging/org.nyxos.Dashboard.png" \
+    "$pkgdir/usr/share/icons/hicolor/512x512/apps/org.nyxos.Dashboard.png"
 }

@@ -4,7 +4,8 @@
 
 use nyx_core::{
     DevicesCommand, DevicesReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
-    NyxOutput, VpnCommand, VpnReport, DEVICES_SOCKET, HEALTH_SOCKET, IDENTITY_SOCKET, VPN_SOCKET,
+    NyxOutput, TelemetryCommand, TelemetryReport, VpnCommand, VpnReport, DEVICES_SOCKET,
+    HEALTH_SOCKET, IDENTITY_SOCKET, TELEMETRY_SOCKET, VPN_SOCKET,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -42,4 +43,8 @@ pub fn send_identity(cmd: IdentityCommand) -> Result<NyxOutput<IdentityReport>, 
 
 pub fn send_devices(cmd: DevicesCommand) -> Result<NyxOutput<DevicesReport>, String> {
     call(DEVICES_SOCKET, &cmd)
+}
+
+pub fn send_telemetry(cmd: TelemetryCommand) -> Result<NyxOutput<TelemetryReport>, String> {
+    call(TELEMETRY_SOCKET, &cmd)
 }

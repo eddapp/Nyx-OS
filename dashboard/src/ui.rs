@@ -3,7 +3,8 @@ use gtk::glib;
 use gtk::prelude::*;
 use nyx_core::{
     DevicesCommand, DevicesReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
-    KillSwitchLevel, NyxOutput, SecurityState, Toggle, VpnCommand, VpnProtocol, VpnReport,
+    KillSwitchLevel, NyxOutput, SecurityState, TelemetryCommand, TelemetryReport, Toggle,
+    VpnCommand, VpnProtocol, VpnReport,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -13,6 +14,27 @@ type ApplyFn = Rc<dyn Fn(Result<NyxOutput<HealthState>, String>)>;
 type VpnApplyFn = Rc<dyn Fn(Result<NyxOutput<VpnReport>, String>)>;
 type IdentityApplyFn = Rc<dyn Fn(Result<NyxOutput<IdentityReport>, String>)>;
 type DevicesApplyFn = Rc<dyn Fn(Result<NyxOutput<DevicesReport>, String>)>;
+type TelemetryApplyFn = Rc<dyn Fn(Result<NyxOutput<TelemetryReport>, String>)>;
+
+/// Human-readable byte size, `1.0` == 1024 of the previous unit.
+fn format_bytes(bytes: f64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
+fn format_kb(kb: u64) -> String {
+    format_bytes(kb as f64 * 1024.0)
+}
+
+fn format_rate(bytes_per_sec: f64) -> String {
+    format!("{}/s", format_bytes(bytes_per_sec))
+}
 
 fn load_css() {
     let provider = gtk::CssProvider::new();
@@ -159,6 +181,10 @@ fn run_identity_command(cmd: IdentityCommand, apply: IdentityApplyFn) {
 
 fn run_devices_command(cmd: DevicesCommand, apply: DevicesApplyFn) {
     run_on_background(cmd, client::send_devices, apply);
+}
+
+fn run_telemetry_command(cmd: TelemetryCommand, apply: TelemetryApplyFn) {
+    run_on_background(cmd, client::send_telemetry, apply);
 }
 
 pub fn build(app: &gtk::Application) {
@@ -327,6 +353,32 @@ pub fn build(app: &gtk::Application) {
         root.append(row);
     }
 
+    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    // --- Telemetry ---------------------------------------------------------
+    root.append(&section_heading("Telemetry"));
+
+    let cpu_label = gtk::Label::new(Some("CPU: unknown"));
+    cpu_label.set_halign(gtk::Align::Start);
+    root.append(&cpu_label);
+
+    let mem_label = gtk::Label::new(Some("Memory: unknown"));
+    mem_label.set_halign(gtk::Align::Start);
+    root.append(&mem_label);
+
+    let disk_label = gtk::Label::new(Some("Disk (/): unknown"));
+    disk_label.set_halign(gtk::Align::Start);
+    root.append(&disk_label);
+
+    let net_label = gtk::Label::new(Some("Network: unknown"));
+    net_label.set_halign(gtk::Align::Start);
+    net_label.set_wrap(true);
+    root.append(&net_label);
+
+    let uptime_label = gtk::Label::new(Some("Uptime: unknown"));
+    uptime_label.set_halign(gtk::Align::Start);
+    root.append(&uptime_label);
+
     let status_label = gtk::Label::new(Some("connecting to nyx-health…"));
     status_label.set_wrap(true);
     status_label.set_halign(gtk::Align::Start);
@@ -453,21 +505,83 @@ pub fn build(app: &gtk::Application) {
             Err(e) => devices_detail_label.set_label(&format!("error: {e}")),
         });
 
+    let telemetry_apply: TelemetryApplyFn =
+        Rc::new(move |result: Result<NyxOutput<TelemetryReport>, String>| match result {
+            Ok(out) => {
+                if let Some(report) = out.data {
+                    let cpu = &report.cpu;
+                    let cpu_text = match cpu.usage_percent {
+                        Some(p) => format!(
+                            "CPU: {p:.1}% (load {:.2} {:.2} {:.2})",
+                            cpu.load_average_1m, cpu.load_average_5m, cpu.load_average_15m
+                        ),
+                        None => format!(
+                            "CPU: measuring… (load {:.2} {:.2} {:.2})",
+                            cpu.load_average_1m, cpu.load_average_5m, cpu.load_average_15m
+                        ),
+                    };
+                    cpu_label.set_label(&cpu_text);
+
+                    mem_label.set_label(&format!(
+                        "Memory: {} / {}",
+                        format_kb(report.memory.used_kb),
+                        format_kb(report.memory.total_kb)
+                    ));
+
+                    match report.disks.iter().find(|d| d.mountpoint == "/") {
+                        Some(root_disk) => disk_label.set_label(&format!(
+                            "Disk (/): {} / {}",
+                            format_bytes(root_disk.used_bytes as f64),
+                            format_bytes(root_disk.total_bytes as f64)
+                        )),
+                        None => disk_label.set_label("Disk (/): not found"),
+                    }
+
+                    let net_summary = report
+                        .network
+                        .iter()
+                        .filter(|n| n.interface != "lo")
+                        .map(|n| {
+                            let rx = n.rx_bytes_per_sec.map(format_rate).unwrap_or_else(|| "…".to_string());
+                            let tx = n.tx_bytes_per_sec.map(format_rate).unwrap_or_else(|| "…".to_string());
+                            format!("{}: ↓{rx} ↑{tx}", n.interface)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("  ");
+                    net_label.set_label(&format!(
+                        "Network: {}",
+                        if net_summary.is_empty() { "no interfaces".to_string() } else { net_summary }
+                    ));
+
+                    let hours = report.uptime_secs / 3600;
+                    let minutes = (report.uptime_secs % 3600) / 60;
+                    uptime_label.set_label(&format!(
+                        "Uptime: {hours}h {minutes}m — {} processes",
+                        report.process_count
+                    ));
+                }
+            }
+            Err(e) => cpu_label.set_label(&format!("error: {e}")),
+        });
+
     run_command(HealthCommand::Status, Rc::clone(&apply));
     run_vpn_command(VpnCommand::Status, Rc::clone(&vpn_apply));
     run_identity_command(IdentityCommand::Status, Rc::clone(&identity_apply));
     run_devices_command(DevicesCommand::Status, Rc::clone(&devices_apply));
+    run_telemetry_command(TelemetryCommand::Status, Rc::clone(&telemetry_apply));
 
     {
         let apply = Rc::clone(&apply);
         let vpn_apply = Rc::clone(&vpn_apply);
         let identity_apply = Rc::clone(&identity_apply);
         let devices_apply = Rc::clone(&devices_apply);
+        let telemetry_apply = Rc::clone(&telemetry_apply);
         glib::timeout_add_seconds_local(5, move || {
             run_command(HealthCommand::Status, Rc::clone(&apply));
             run_vpn_command(VpnCommand::Status, Rc::clone(&vpn_apply));
             run_identity_command(IdentityCommand::Status, Rc::clone(&identity_apply));
             run_devices_command(DevicesCommand::Status, Rc::clone(&devices_apply));
+            run_telemetry_command(TelemetryCommand::Status, Rc::clone(&telemetry_apply));
             glib::ControlFlow::Continue
         });
     }

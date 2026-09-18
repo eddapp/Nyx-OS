@@ -402,3 +402,70 @@ pub struct DevicesReport {
     pub state: SecurityState,
     pub detail: String,
 }
+
+// ---------------------------------------------------------------------------
+// nyx-telemetry wire protocol — socket at `TELEMETRY_SOCKET`.
+//
+// Unlike every other Nyx daemon, this one needs no privileged operation at
+// all — every value here comes from `/proc` or `statvfs`, both readable by
+// any user. It runs unprivileged (see its systemd unit's `DynamicUser=yes`)
+// and its socket is world-readable; there is no security boundary to
+// enforce over CPU/RAM/network numbers.
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum TelemetryCommand {
+    Status,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct CpuTelemetry {
+    /// `None` on the daemon's first-ever `Status` call — CPU usage needs
+    /// two samples to compute a rate, and there's no prior one yet.
+    /// Reported as unknown rather than a fabricated 0%.
+    pub usage_percent: Option<f64>,
+    pub load_average_1m: f64,
+    pub load_average_5m: f64,
+    pub load_average_15m: f64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct MemoryTelemetry {
+    pub total_kb: u64,
+    pub available_kb: u64,
+    pub used_kb: u64,
+    pub swap_total_kb: u64,
+    pub swap_used_kb: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiskTelemetry {
+    pub mountpoint: String,
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct NetworkInterfaceTelemetry {
+    pub interface: String,
+    /// `None` on the first sample seen for this interface this run.
+    pub rx_bytes_per_sec: Option<f64>,
+    pub tx_bytes_per_sec: Option<f64>,
+    pub rx_bytes_total: u64,
+    pub tx_bytes_total: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TelemetryReport {
+    pub cpu: CpuTelemetry,
+    pub memory: MemoryTelemetry,
+    /// Every real (non-pseudo) mounted filesystem found in `/proc/mounts`.
+    pub disks: Vec<DiskTelemetry>,
+    /// Every interface `/proc/net/dev` reports, including loopback.
+    pub network: Vec<NetworkInterfaceTelemetry>,
+    pub uptime_secs: u64,
+    pub process_count: usize,
+    pub detail: String,
+}

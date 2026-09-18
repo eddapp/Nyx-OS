@@ -6,6 +6,8 @@ members = [
     "core/crates/nyx-vpn",
     "core/crates/nyx-identity",
     "core/crates/nyx-devices",
+    "core/crates/nyx-telemetry",
+    "core/crates/nyx-diagnostics",
     "core/crates/nyx-dns",
     "core/crates/nyx-integrity",
     "core/crates/nyx-wipe",
