@@ -25,6 +25,8 @@ BLACKARCH_KEY="4345771566D76038C7FEB43863EC0ADBEA87E4E3"
 NYX_PACKAGES=(nyx-health nyx-vpn nyx-identity nyx-devices nyx-telemetry nyx-diagnostics nyx-dns nyx-integrity nyx-wipe nyx-isolation nyx-workflow nyx-thunar-integration nyx-desktop-sessions nyx-dashboard)
 # shellcheck source=build-aur-packages.sh
 source "$PROFILE_DIR/build-aur-packages.sh"
+# shellcheck source=sign-packages.sh
+source "$PROFILE_DIR/sign-packages.sh"
 
 PROFILE="desktop"
 CLEAN=0
@@ -137,6 +139,15 @@ if [[ "$CLEAN" -eq 1 ]]; then
     rm -rf "$WORK_DIR" "$OUT_DIR" "$LOCAL_REPO_DIR" "$BUILD_PACMAN_CONF"
 fi
 
+# --- NyxOS's own build-signing key: generate one (first run on this
+# machine) or reuse the existing one (later runs), isolated in its own
+# GNUPGHOME under this profile dir -- never the developer's own ~/.gnupg --
+# then trust it on this build host exactly like the BlackArch key above, so
+# pacstrap/mkarchiso can verify [nyxos] packages/database during ISO
+# assembly.
+ensure_nyx_signing_key
+trust_nyx_signing_key_on_host
+
 # --- Build NyxOS's own packages and index them into a local file:// repo ---
 mkdir -p "$LOCAL_REPO_DIR"
 for pkg in "${NYX_PACKAGES[@]}"; do
@@ -151,18 +162,63 @@ repo-add "$LOCAL_REPO_DIR/nyxos.db.tar.gz" "$LOCAL_REPO_DIR"/*.pkg.tar.zst
 # (it returns early, before touching the repo at all) when it's empty. ---
 build_aur_packages "$LOCAL_REPO_DIR"
 
+# --- Sign every package this build produced (NyxOS-native + any AUR ones
+# build_aur_packages just added) and re-index + sign the repo database.
+# Runs only now, after build_aur_packages, so every *.pkg.tar.zst that will
+# end up in the [nyxos] repo already exists in $LOCAL_REPO_DIR. The repo-add
+# call inside sign_nyx_repo_db is a harmless re-index over the same files
+# (see the note above build_aur_packages) except this time with -s/-k, so
+# the resulting nyxos.db.tar.gz also carries a database-level signature,
+# not just the per-package ones sign_nyx_packages just wrote. ---
+sign_nyx_packages "$LOCAL_REPO_DIR"
+sign_nyx_repo_db "$LOCAL_REPO_DIR" "nyxos.db.tar.gz"
+
 # pacman.conf.local = the checked-in pacman.conf + a [nyxos] repo pointing at
 # the local-repo dir we just built. Regenerated every run since the absolute
 # path is host-specific; never edits the checked-in pacman.conf.
+#
+# SigLevel = Required TrustedOnly: both the repo database and every package
+# in it must now carry a valid signature (Required, applies to both since
+# neither is qualified with a Package/Database prefix), and that signature
+# must chain to a key already in the trusted keyring -- TrustedOnly, which
+# is also pacman's own default when no trust qualifier is given at all, but
+# spelled out here so it's unmistakable that TrustAll's blanket "accept
+# anything" has actually been replaced, not merely renamed. The NyxOS
+# build-signing key was just locally signed into the build host's pacman
+# keyring above via trust_nyx_signing_key_on_host, which is what makes it
+# "trusted" for this check.
 cp "$PROFILE_DIR/pacman.conf" "$BUILD_PACMAN_CONF"
 cat >> "$BUILD_PACMAN_CONF" <<EOF
 
 [nyxos]
-SigLevel = Optional TrustAll
+SigLevel = Required TrustedOnly
 Server = file://$LOCAL_REPO_DIR
 EOF
 
+# --- Reproducible-build groundwork: pin mkarchiso's own timestamp source
+# (SOURCE_DATE_EPOCH) to this commit's own commit time instead of "now", so
+# two builds from the same commit land closer to byte-identical output
+# wherever the rest of the toolchain (squashfs mtimes, ISO9660/UDF/El Torito
+# timestamps, the ext4 hash seed, etc.) already supports it. mkarchiso
+# itself reads SOURCE_DATE_EPOCH from its environment when present and only
+# falls back to the current wall-clock time otherwise (see
+# `grep SOURCE_DATE_EPOCH /usr/bin/mkarchiso`) -- this is real, current
+# archiso behavior, not something added here. sudo resets the environment
+# by default, so --preserve-env is required or mkarchiso would never see it.
+export SOURCE_DATE_EPOCH="$(git -C "$REPO_ROOT" log -1 --format=%ct)"
+
 mkdir -p "$OUT_DIR"
-sudo mkarchiso -v -C "$BUILD_PACMAN_CONF" -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
+sudo --preserve-env=SOURCE_DATE_EPOCH mkarchiso -v -C "$BUILD_PACMAN_CONF" -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
+
+# --- Locate the ISO mkarchiso just wrote. Its filename embeds
+# iso_version=$(date +%Y.%m.%d) from profiledef.sh, evaluated at mkarchiso's
+# own runtime, so it isn't hardcoded here -- just take the most recently
+# modified *.iso in $OUT_DIR, which is reliably the one just built. ---
+iso_file="$(find "$OUT_DIR" -maxdepth 1 -name '*.iso' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)"
+if [[ -n "$iso_file" ]]; then
+    write_and_sign_build_manifest "$iso_file" "$OUT_DIR"
+else
+    echo "warning: no .iso found in $OUT_DIR, skipping build manifest" >&2
+fi
 
 echo "ISO written to $OUT_DIR (profile: $PROFILE)"

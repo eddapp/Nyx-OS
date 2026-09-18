@@ -10,6 +10,11 @@
 /iso/local-repo/
 /iso/pacman.conf.local
 
+# NyxOS build-signing GPG keyring -- private key material, generated
+# per-build-host by iso/sign-packages.sh, never the developer's own
+# personal ~/.gnupg and never to be committed.
+/iso/nyx-signing-gpg/
+
 # built OS images (too large for git; build artifacts, not source)
 /archlinux/
 *.iso

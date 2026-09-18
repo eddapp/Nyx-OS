@@ -29,6 +29,7 @@ dosfstools
 e2fsprogs
 gptfdisk
 parted
+cryptsetup
 arch-install-scripts
 archinstall
 rsync
@@ -41,6 +42,10 @@ openssh
 wireguard-tools
 openvpn
 macchanger
+iproute2
+iputils
+traceroute
+curl
 
 # --- Privacy stack (control layer targets) ---
 tor
@@ -49,12 +54,17 @@ dnscrypt-proxy
 # --- NyxOS control layer (built from install/pkgbuild/, see build.sh) ---
 nyx-health
 nyx-vpn
+nyx-identity
+nyx-devices
+nyx-telemetry
+nyx-diagnostics
 nyx-dns
 nyx-integrity
 nyx-wipe
 nyx-isolation
 nyx-workflow
 nyx-thunar-integration
+nyx-desktop-sessions
 nyx-dashboard
 
 # --- Graphics / display ---
@@ -66,6 +76,11 @@ xf86-video-vesa
 # --- Desktop environment ---
 xfce4
 xfce4-goodies
+# Explicit even though the xfce4 group pulls it in transitively: xfwm4 is
+# the window manager for the default "Xfce Session" login (Nyx Classic).
+# Listed directly so removing/trimming some other xfce4 component can never
+# take it along and silently break the default session.
+xfwm4
 lightdm
 lightdm-gtk-greeter
 pipewire
@@ -73,6 +88,32 @@ pipewire-pulse
 pavucontrol
 ttf-dejavu
 noto-fonts
+
+# --- Default browser ---
+# Zen (Firefox-based) — no official/BlackArch package, built from the
+# zen-browser-bin AUR PKGBUILD at ISO-build time via
+# iso/build-aur-packages.sh into the same local [nyxos] repo NyxOS's own
+# packages use, so it resolves here exactly like any other package name.
+zen-browser-bin
+
+# Tor Browser — ships directly from the already-enabled [blackarch] repo,
+# no separate download-on-first-run launcher needed.
+tor-browser
+
+# --- Mandatory access control (AppArmor) — Zen's profile at
+# iso/airootfs/etc/apparmor.d/usr.bin.zen-browser, enabled via the
+# multi-user.target.wants/apparmor.service symlink and the lsm= kernel
+# param in the boot configs. ---
+apparmor
+
+# --- Nyx Tiling desktop profile (optional login session selectable at the
+# LightDM greeter; xfwm4 above remains the default WM for Nyx Classic) —
+# see install/desktop-sessions/ and the nyx-desktop-sessions package. ---
+i3-wm
+i3status
+i3lock
+dmenu
+polkit-gnome
 
 # --- Rust toolchain for the control layer ---
 rust
@@ -86,9 +127,33 @@ blackarch-sniffer
 blackarch-networking
 blackarch-forensic
 
+# --- Wireless/Bluetooth/malware-analysis essentials (audited against
+# Kali's own tool metapackages 2026-09-18 — Kodachi has no equivalent for
+# these at all). Named individual tools, not whole blackarch-<category>
+# groups (a normal Kali or Kodachi install doesn't ship a category's full
+# tool set by default either) — these six are all in Arch's own official
+# `extra` repo, no BlackArch dependency needed for this part at all.
+aircrack-ng
+kismet
+wifite
+reaver
+bettercap
+yara
+
+# --- SDR + blue-team/defensive tooling: individual BlackArch packages,
+# same "named tools, not whole groups" reasoning as above. Kodachi has no
+# defensive-security angle at all, so this is a real differentiator rather
+# than catch-up. ---
+gqrx-scanner
+rtl-433
+chkrootkit
+suricata
+zeek
+
 # --- Application isolation (backs nyx-isolation) ---
 firejail
 firetools
+podman
 
 # --- Desktop security/privacy apps, wired into Thunar/nyx-wipe/nyx-isolation ---
 keepassxc
@@ -100,6 +165,7 @@ usbguard
 xterm
 ent
 gnupg
+openssl
 xclip
 ethtool
 usbutils

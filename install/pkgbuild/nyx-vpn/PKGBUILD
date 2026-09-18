@@ -4,10 +4,27 @@
 pkgname=nyx-vpn
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="NyxOS VPN manager — WireGuard/OpenVPN lifecycle with real handshake/route verification"
+pkgdesc="NyxOS VPN manager — WireGuard/AmneziaWG/OpenVPN/Xray/Shadowsocks/Hysteria2/SOCKS5 lifecycle with real verification"
 arch=('x86_64')
 license=('MIT')
-depends=('wireguard-tools' 'openvpn' 'iproute2' 'systemd')
+# amneziawg-tools: AUR, awg/awg-quick userspace tools.
+# amneziawg-dkms: AUR, kernel module — AmneziaWG's obfuscation fields
+#   aren't in mainline WireGuard, so this can't share it in-kernel.
+# xray: BlackArch (already enabled in the shipped pacman.conf).
+# shadowsocks-rust: official 'extra' — also ships the
+#   shadowsocks-rust@.service template unit this crate drives directly.
+# hysteria-bin: AUR, prebuilt hysteria2 client/server binary.
+# badvpn: official 'extra' — badvpn-tun2socks bridges a SOCKS5 endpoint
+#   into a real TUN device; the 'dante' package itself is not a
+#   dependency, see src/dante.rs's module doc for why.
+depends=(
+    'wireguard-tools' 'openvpn' 'iproute2' 'systemd'
+    'amneziawg-tools' 'amneziawg-dkms'
+    'xray'
+    'shadowsocks-rust'
+    'hysteria-bin'
+    'badvpn'
+)
 makedepends=('cargo')
 
 _repo_root="$startdir/../../.."
@@ -22,4 +39,13 @@ package() {
     "$pkgdir/usr/bin/nyx-vpn"
   install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn.service" \
     "$pkgdir/usr/lib/systemd/system/nyx-vpn.service"
+  install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn-xray@.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-vpn-xray@.service"
+  install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn-hysteria@.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-vpn-hysteria@.service"
+  install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn-socks5@.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-vpn-socks5@.service"
+  # No unit for Shadowsocks: it drives shadowsocks-rust's own upstream
+  # shadowsocks-rust@.service template, not one nyx-vpn ships.
+  install -dm755 "$pkgdir/etc/nyx/xray" "$pkgdir/etc/nyx/hysteria" "$pkgdir/etc/nyx/socks5"
 }

@@ -1,9 +1,14 @@
+mod amneziawg;
+mod dante;
 mod handler;
+mod hysteria;
 mod openvpn;
 mod route;
+mod shadowsocks;
 mod state;
 mod systemd_ctl;
 mod wireguard;
+mod xray;
 
 use nyx_core::VPN_SOCKET;
 use state::AppState;

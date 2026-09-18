@@ -24,6 +24,30 @@ pub fn default_route_interface() -> Option<String> {
     tokens.get(dev_pos + 1).map(|s| s.to_string())
 }
 
+/// The gateway IP and interface currently carrying the IPv4 default route,
+/// if any. Used by the SOCKS5 backend to add a bypass route to the SOCKS5
+/// endpoint itself over the *existing* path before replacing the default
+/// route with a TUN device that only knows how to reach that endpoint via
+/// SOCKS5 — without this, connecting to the SOCKS5 server would recurse
+/// through the tunnel that depends on connecting to it.
+pub fn default_gateway() -> Option<(String, String)> {
+    let output = Command::new("ip")
+        .args(["-o", "route", "show", "default"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let first_line = text.lines().next()?;
+    let tokens: Vec<&str> = first_line.split_whitespace().collect();
+    let dev_pos = tokens.iter().position(|t| *t == "dev")?;
+    let via_pos = tokens.iter().position(|t| *t == "via")?;
+    let dev = tokens.get(dev_pos + 1)?.to_string();
+    let via = tokens.get(via_pos + 1)?.to_string();
+    Some((dev, via))
+}
+
 /// True if `iface` has at least one IPv4 address assigned — used as a weak
 /// signal that a tunnel interface (especially OpenVPN's, which doesn't
 /// expose a handshake-recency concept the way WireGuard does) is actually

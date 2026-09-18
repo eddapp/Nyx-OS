@@ -203,6 +203,37 @@ pub enum VpnProtocol {
     /// `openvpn-client@<name>.service`, profiles at
     /// `/etc/openvpn/client/<name>.conf`.
     OpenVpn,
+    /// AmneziaWG — a WireGuard fork adding traffic-obfuscation parameters
+    /// (`Jc`/`Jmin`/`Jmax`/`S1`/`S2`/`H1`-`H4`) to the same config format.
+    /// `awg-quick`/`awg` mirror `wg-quick`/`wg`'s CLI exactly, profiles at
+    /// `/etc/amnezia/amneziawg/<name>.conf`.
+    AmneziaWg,
+    /// Xray-core — one binary serving VLESS, VMess, Trojan, and REALITY
+    /// (REALITY is a `streamSettings.realitySettings` option on a VLESS
+    /// outbound, not a separate protocol). Run via `xray run -c
+    /// <config>.json` under a templated systemd unit
+    /// (`nyx-vpn-xray@<name>.service`), profiles at
+    /// `/etc/nyx/xray/<name>.json`.
+    Xray,
+    /// shadowsocks-rust. Run via `ssservice local -c <config>.json` under
+    /// that package's own upstream-shipped `shadowsocks-rust@<name>.service`
+    /// template unit (not one nyx-vpn ships), profiles at
+    /// `/etc/shadowsocks-rust/<name>.json`.
+    Shadowsocks,
+    /// Hysteria2 — a QUIC-based proxy. Run via `hysteria client -c
+    /// <config>.yaml` under a templated systemd unit
+    /// (`nyx-vpn-hysteria@<name>.service`), profiles at
+    /// `/etc/nyx/hysteria/<name>.yaml`.
+    Hysteria2,
+    /// SOCKS5, bridged into a real TUN interface (and the OS default
+    /// route) via `badvpn-tun2socks`. Deliberately not named/backed by the
+    /// `dante` package: dante's own client-side story is `socksify`, an
+    /// LD_PRELOAD wrapper for one application at a time, not a
+    /// system-wide tunnel — see `dante.rs` for the full reasoning. SOCKS5
+    /// itself has no built-in encryption or authentication, so this
+    /// protocol is never reported fully `Protected` no matter how clean
+    /// the route looks — see `handler.rs`.
+    Socks5,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -234,10 +265,13 @@ pub struct VpnReport {
     pub protocol: Option<VpnProtocol>,
     pub profile: Option<String>,
     pub interface: Option<String>,
-    /// WireGuard only. `None` means either not connected, or connected but
-    /// no handshake has happened yet — which is normal immediately after
-    /// `wg-quick up` on a config with no traffic and no persistent
-    /// keepalive; it does not by itself mean anything is wrong.
+    /// WireGuard and AmneziaWG only — both expose the same
+    /// handshake-recency concept over the same shape of CLI query
+    /// (`wg`/`awg show <iface> latest-handshakes`). `None` means either
+    /// not connected, connected but no peer has handshaked yet (normal
+    /// immediately after bringing the tunnel up, not itself a fault), or
+    /// connected via a protocol that has no such concept to report at all
+    /// (OpenVPN, Xray, Shadowsocks, Hysteria2, SOCKS5).
     pub handshake_age_secs: Option<u64>,
     /// True only when the OS default route actually goes out the VPN
     /// interface. An "up" tunnel that isn't carrying the default route may
