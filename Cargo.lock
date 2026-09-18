@@ -877,6 +877,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyx-hardening"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "nix",
+ "nyx-core",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "nyx-health"
 version = "0.1.0"
 dependencies = [
@@ -955,6 +967,20 @@ dependencies = [
  "tokio",
  "tracing",
  "zbus",
+]
+
+[[package]]
+name = "nyx-watch"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "nix",
+ "nyx-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
