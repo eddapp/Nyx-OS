@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::{amneziawg, dante, hysteria, openvpn, route, shadowsocks, wireguard, xray};
+use crate::{amneziawg, cloak, dante, hysteria, openvpn, route, shadowsocks, wireguard, xray};
 use nyx_core::{NyxOutput, SecurityState, VpnCommand, VpnProfile, VpnProtocol, VpnReport};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
@@ -461,6 +461,33 @@ pub async fn dispatch(conn: &Connection, state: &AppState, cmd: VpnCommand) -> N
                     NyxOutput::ok(BINARY, "connect_via_socks_proxy", detail, Some(report))
                 }
                 Err(e) => NyxOutput::<VpnReport>::err(BINARY, "connect_via_socks_proxy", e),
+            }
+        }
+
+        VpnCommand::ConnectViaCloak { profile, cloak_config } => {
+            if !openvpn::list_profiles().contains(&profile) {
+                return NyxOutput::<VpnReport>::err(
+                    BINARY,
+                    "connect_via_cloak",
+                    format!("no OpenVPN profile named '{profile}' at /etc/openvpn/client/"),
+                );
+            }
+
+            // Never run two tunnels at once — tear down whatever's active first.
+            if let Some((prev_protocol, prev_name)) = state.active.lock().await.clone() {
+                let _ = teardown(conn, prev_protocol, &prev_name).await;
+            }
+
+            let result = cloak::up(conn, &profile, &cloak_config).await.map_err(|e| e.to_string());
+
+            match result {
+                Ok(()) => {
+                    *state.active.lock().await = Some((VpnProtocol::OpenVpn, profile));
+                    let report = probe(conn, state).await;
+                    let detail = report.detail.clone();
+                    NyxOutput::ok(BINARY, "connect_via_cloak", detail, Some(report))
+                }
+                Err(e) => NyxOutput::<VpnReport>::err(BINARY, "connect_via_cloak", e),
             }
         }
 

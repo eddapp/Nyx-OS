@@ -313,6 +313,52 @@ pub struct SocksProxyAddr {
     pub port: u16,
 }
 
+/// Real client-side config for `cbeuw/Cloak`'s obfuscation layer
+/// (`ck-client`), specifically for wrapping OpenVPN — see
+/// [`VpnCommand::ConnectViaCloak`]. Field names/shapes are confirmed
+/// against upstream Cloak's own `internal/client/state.go` `RawConfig`
+/// struct and its `example_config/ckclient.json` (Cloak v2.10.0, the
+/// version `cloak-obfuscation-bin` on the AUR currently packages): Go
+/// marshals a `[]byte` field as base64 JSON, which is why `public_key`/
+/// `uid` are base64 strings here, not raw bytes.
+///
+/// This only covers Cloak's "direct" transport (`ck-client` dials
+/// `remote_host`/`remote_port` itself) — Cloak's CDN-fronting transport
+/// (`CDNOriginHost`/`CDNWsUrlPath`, dialing a CDN edge instead) is a real
+/// but separate mode this struct doesn't expose.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CloakConfig {
+    /// The Cloak server's real public address — confirmed against Cloak's
+    /// own wiki: this is the *same* host:port the OpenVPN profile's own
+    /// `remote` directive already points at, because `ck-server` is the
+    /// thing actually answering on that port (masquerading as ordinary
+    /// HTTPS) with the real OpenVPN server sitting behind it, reachable
+    /// only via `ck-server`'s `ProxyBook`.
+    pub remote_host: String,
+    pub remote_port: u16,
+    /// curve25519 public key Cloak's server operator issued, base64.
+    pub public_key: String,
+    /// User ID Cloak's server operator issued, base64.
+    pub uid: String,
+    /// The innocuous domain to present via SNI/Host (Cloak's domain-fronting
+    /// disguise), e.g. `"www.bing.com"` — must be a real site the server's
+    /// `RedirAddr`/censor's DPI would consider unremarkable.
+    pub server_name: String,
+    /// `"aes-256-gcm"`, `"aes-128-gcm"`, `"chacha20-poly1305"`, or `"plain"`
+    /// — Cloak's own docs warn `"plain"` must not be used when wrapping
+    /// OpenVPN specifically, since OpenVPN's own handshake has a
+    /// recognizable fingerprint that plaintext framing would still expose;
+    /// `nyx-vpn` rejects `"plain"` outright for this command rather than
+    /// silently accepting a config that defeats the point of wrapping.
+    pub encryption_method: String,
+    /// Number of underlying TCP connections Cloak multiplexes over.
+    /// `None` defers to Cloak's own default (4).
+    pub num_conn: Option<u32>,
+    /// TLS ClientHello fingerprint to mimic (`"chrome"`, `"firefox"`, ...).
+    /// `None` defers to Cloak's own default (`"chrome"`).
+    pub browser_sig: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum VpnCommand {
@@ -341,6 +387,19 @@ pub enum VpnCommand {
     /// faking support. See `nyx-vpn`'s backend modules for the verified
     /// details behind each.
     ConnectViaSocksProxy { protocol: VpnProtocol, profile: String, socks_proxy: SocksProxyAddr },
+    /// OpenVPN-over-Cloak: wraps `profile`'s OpenVPN connection in
+    /// `cbeuw/Cloak`'s obfuscation layer (`ck-client`), a censorship
+    /// circumvention tool that disguises the connection as ordinary HTTPS
+    /// to `cloak_config.server_name` (domain fronting) — this is real
+    /// traffic-shape obfuscation against DPI-based censorship, *not* an
+    /// additional cryptographic guarantee: `handler.rs` still caps the
+    /// resulting connection at whatever OpenVPN itself would honestly earn
+    /// (`Protected` only once the interface has an address and carries the
+    /// default route, same as plain OpenVPN). Only OpenVPN is honored —
+    /// Cloak's own `ProxyBook`/config shape is generic, but this command is
+    /// deliberately scoped to the one backend NyxOS has a verified real
+    /// integration for.
+    ConnectViaCloak { profile: String, cloak_config: CloakConfig },
     /// Tear down whatever is currently up, if anything.
     Disconnect,
 }

@@ -4,7 +4,7 @@
 pkgname=nyx-vpn
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="NyxOS VPN manager — WireGuard/AmneziaWG/OpenVPN/Xray/Shadowsocks/Hysteria2/SOCKS5 lifecycle with real verification"
+pkgdesc="NyxOS VPN manager — WireGuard/AmneziaWG/OpenVPN/Xray/Shadowsocks/Hysteria2/SOCKS5 lifecycle with real verification, plus OpenVPN-over-Cloak"
 arch=('x86_64')
 license=('MIT')
 # amneziawg-tools: AUR, awg/awg-quick userspace tools.
@@ -17,6 +17,8 @@ license=('MIT')
 # badvpn: official 'extra' — badvpn-tun2socks bridges a SOCKS5 endpoint
 #   into a real TUN device; the 'dante' package itself is not a
 #   dependency, see src/dante.rs's module doc for why.
+# cloak-obfuscation-bin: AUR, prebuilt ck-client/ck-server binaries (see
+#   src/cloak.rs's module doc) — only ck-client is actually driven here.
 depends=(
     'wireguard-tools' 'openvpn' 'iproute2' 'systemd'
     'amneziawg-tools' 'amneziawg-dkms'
@@ -24,6 +26,7 @@ depends=(
     'shadowsocks-rust'
     'hysteria-bin'
     'badvpn'
+    'cloak-obfuscation-bin'
 )
 makedepends=('cargo')
 
@@ -45,6 +48,8 @@ package() {
     "$pkgdir/usr/lib/systemd/system/nyx-vpn-hysteria@.service"
   install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn-socks5@.service" \
     "$pkgdir/usr/lib/systemd/system/nyx-vpn-socks5@.service"
+  install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn-cloak@.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-vpn-cloak@.service"
   # No unit for Shadowsocks: it drives shadowsocks-rust's own upstream
   # shadowsocks-rust@.service template, not one nyx-vpn ships.
   install -dm755 "$pkgdir/etc/nyx/xray" "$pkgdir/etc/nyx/hysteria" "$pkgdir/etc/nyx/socks5"

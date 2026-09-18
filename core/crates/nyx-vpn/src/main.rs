@@ -1,4 +1,5 @@
 mod amneziawg;
+mod cloak;
 mod dante;
 mod handler;
 mod hysteria;

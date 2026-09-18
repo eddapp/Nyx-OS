@@ -8,7 +8,7 @@ pub mod protocol;
 pub use error::{NyxError, NyxResult};
 pub use output::{NyxOutput, Status};
 pub use protocol::{
-    CpuTelemetry, DeviceModule, DeviceRadio, DevicesCommand, DevicesReport, DiskTelemetry,
+    CloakConfig, CpuTelemetry, DeviceModule, DeviceRadio, DevicesCommand, DevicesReport, DiskTelemetry,
     DnsCommand, DnsProvider, DnsReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
     IntegrityCommand, IntegrityReport, InterfaceIdentity, KillSwitchLevel,
     MemoryTelemetry, NetworkInterfaceTelemetry, SecurityState, SocksProxyAddr, TelemetryCommand,
