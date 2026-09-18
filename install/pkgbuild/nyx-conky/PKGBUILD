@@ -1,0 +1,48 @@
+# Maintainer: NyxOS
+# Packages the NyxOS desktop overlay: a Conky config + small status helper
+# that sits directly on the desktop background showing system stats and
+# real NyxOS security/privacy state (Tor/kill-switch/VPN/DNS, plus
+# local-only network info). Deliberately its own package rather than
+# folded into nyx-desktop-sessions: this overlay is shown in BOTH "Nyx
+# Classic" and "Nyx Tiling" (nyx-desktop-sessions only packages the
+# optional i3-based tiling session itself, an unrelated concern with its
+# own unrelated dependency set). No compilation — a config file plus a
+# shell helper.
+pkgname=nyx-conky
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS desktop overlay — Conky config + status helper showing system and NyxOS security/privacy state on the desktop background"
+arch=('any')
+license=('MIT')
+# nyx-diagnostics: unprivileged read of nyx-health/nyx-vpn/nyx-dns's live
+# status (same socket the dashboard uses). iproute2: local-only
+# route/interface reads. Deliberately no dependency on any daemon needing
+# root beyond what's already required to run those daemons themselves.
+depends=('conky' 'nyx-diagnostics' 'iproute2')
+
+_repo_root="$startdir/../../.."
+_conky_dir="$_repo_root/install/conky"
+
+package() {
+  install -Dm644 "$_conky_dir/conky.conf" \
+    "$pkgdir/etc/nyx/conky/conky.conf"
+
+  install -Dm755 "$_conky_dir/nyx-conky-status.sh" \
+    "$pkgdir/usr/lib/nyx/conky/nyx-conky-status.sh"
+
+  install -d "$pkgdir/etc/xdg/autostart"
+  cat > "$pkgdir/etc/xdg/autostart/nyxos-conky.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=NyxOS Desktop Overlay
+Comment=Always-on system/security stats overlay (Conky)
+Exec=conky -c /etc/nyx/conky/conky.conf
+# Only processed by xfce4-session itself, i.e. "Nyx Classic" — "Nyx
+# Tiling" never runs xfce4-session (see
+# install/desktop-sessions/nyxos-tiling-session) and instead launches
+# Conky directly from that script.
+OnlyShowIn=XFCE;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+EOF
+}

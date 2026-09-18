@@ -2,10 +2,12 @@ use crate::client;
 use crate::diagnostics::{self, DefaultRoute, PublicIpResult};
 use crate::schedule;
 use crate::workflow;
+use gtk::gio::prelude::*;
 use gtk::glib;
 use gtk::prelude::*;
+use nyx_core::protocol::{FreeProvider, TemplateProvider};
 use nyx_core::{
-    DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
+    CloakConfig, DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
     IdentityCommand, IdentityReport, IntegrityCommand, IntegrityReport, KillSwitchLevel,
     NyxOutput, SecurityState, SocksProxyAddr, TelemetryCommand, TelemetryReport, Toggle,
     VpnCommand, VpnProtocol, VpnReport,
@@ -75,6 +77,37 @@ fn profile_dir(protocol: VpnProtocol) -> &'static str {
         VpnProtocol::Mieru => "/etc/nyx/mieru",
     }
 }
+
+/// The two curated, genuinely free public VPN directories `nyx-vpn`'s
+/// `FetchFreeProvider` knows how to fetch from (see
+/// `nyx_core::protocol::FreeProvider`), in the order the Fetch Free
+/// Provider dropdown lists them.
+const FREE_PROVIDERS: &[(FreeProvider, &str)] = &[
+    (FreeProvider::VpnGate, "VPN Gate"),
+    (FreeProvider::Riseup, "Riseup"),
+];
+
+/// Only `FreeProvider::VpnGate`'s relay choice can be narrowed by country —
+/// `Riseup` has no country selection of its own, per
+/// `VpnCommand::FetchFreeProvider`'s own doc comment.
+fn free_provider_supports_country(provider: FreeProvider) -> bool {
+    matches!(provider, FreeProvider::VpnGate)
+}
+
+/// The three commercial providers `nyx-vpn`'s `WriteProviderTemplate` can
+/// write a config skeleton for (see `nyx_core::protocol::TemplateProvider`),
+/// in the order the Write Provider Template dropdown lists them.
+const TEMPLATE_PROVIDERS: &[(TemplateProvider, &str)] = &[
+    (TemplateProvider::Mullvad, "Mullvad"),
+    (TemplateProvider::ProtonVpn, "ProtonVPN"),
+    (TemplateProvider::NordVpn, "NordVPN"),
+];
+
+/// Real encryption methods `cbeuw/Cloak` accepts. `"plain"` is deliberately
+/// left off this list — `nyx-vpn` itself always rejects it when wrapping
+/// OpenVPN (see `CloakConfig::encryption_method`'s doc comment), so
+/// offering it here would just be an option guaranteed to fail.
+const CLOAK_ENCRYPTION_METHODS: &[&str] = &["aes-256-gcm", "aes-128-gcm", "chacha20-poly1305"];
 
 struct PeriodicTask {
     id: &'static str,
@@ -532,34 +565,35 @@ pub fn build(app: &gtk::Application) {
     vpn_profile_status_label.set_halign(gtk::Align::Start);
     network_tab.append(&vpn_profile_status_label);
 
-    // Real profile names for whichever protocol is currently selected, in
-    // the same order as `vpn_profile_dropdown`'s model — `VpnCommand::List`
-    // is the only source of truth here; the dashboard never guesses a name
-    // or reads `/etc/wireguard` (or any other backend's profile dir)
-    // itself, since these are root-only directories it cannot see into.
-    let vpn_profiles_state: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+    // Real profile names (plus each one's `incomplete` flag) for whichever
+    // protocol is currently selected, in the same order as
+    // `vpn_profile_dropdown`'s model — `VpnCommand::List` is the only
+    // source of truth here; the dashboard never guesses a name or reads
+    // `/etc/wireguard` (or any other backend's profile dir) itself, since
+    // these are root-only directories it cannot see into.
+    let vpn_profiles_state: Rc<RefCell<Vec<(String, bool)>>> = Rc::new(RefCell::new(Vec::new()));
 
     fn refresh_vpn_profiles(
         protocol: VpnProtocol,
         protocol_label: &'static str,
         dropdown: gtk::DropDown,
         empty_label: gtk::Label,
-        profiles_state: Rc<RefCell<Vec<String>>>,
+        profiles_state: Rc<RefCell<Vec<(String, bool)>>>,
     ) {
         let apply: VpnApplyFn = Rc::new(move |result| match result {
             Ok(out) => {
-                let names: Vec<String> = out
+                let entries: Vec<(String, bool)> = out
                     .data
                     .map(|report| {
                         report
                             .profiles
                             .into_iter()
                             .filter(|p| p.protocol == protocol)
-                            .map(|p| p.name)
+                            .map(|p| (p.name, p.incomplete))
                             .collect()
                     })
                     .unwrap_or_default();
-                if names.is_empty() {
+                if entries.is_empty() {
                     dropdown.set_model(gtk::gio::ListModel::NONE);
                     dropdown.set_visible(false);
                     empty_label.set_label(&format!(
@@ -568,13 +602,27 @@ pub fn build(app: &gtk::Application) {
                     ));
                     empty_label.set_visible(true);
                 } else {
-                    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                    // A profile still carrying an unfilled `WriteProviderTemplate`
+                    // placeholder gets a visible marker in its own dropdown
+                    // entry, so picking it isn't a silent trap — see the
+                    // `incomplete` check in `vpn_connect_btn`'s handler below.
+                    let labels: Vec<String> = entries
+                        .iter()
+                        .map(|(name, incomplete)| {
+                            if *incomplete {
+                                format!("{name} (incomplete — needs your own credentials)")
+                            } else {
+                                name.clone()
+                            }
+                        })
+                        .collect();
+                    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
                     dropdown.set_model(Some(&gtk::StringList::new(&refs)));
                     dropdown.set_selected(0);
                     dropdown.set_visible(true);
                     empty_label.set_visible(false);
                 }
-                *profiles_state.borrow_mut() = names;
+                *profiles_state.borrow_mut() = entries;
             }
             Err(e) => {
                 dropdown.set_model(gtk::gio::ListModel::NONE);
@@ -619,18 +667,108 @@ pub fn build(app: &gtk::Application) {
     ));
     network_tab.append(&connect_via_tor_check);
 
+    // --- OpenVPN-over-Cloak (censorship circumvention) ------------------
+    // A secondary, collapsible section rather than always-visible fields:
+    // `CloakConfig` has six real inputs, and the common case (a plain
+    // OpenVPN connect) needs none of them — see
+    // `nyx_core::protocol::CloakConfig` for the verified field set this
+    // mirrors exactly. Only ever relevant for OpenVPN, so it's hidden
+    // outright for every other protocol, the same way `connect_via_tor_check`
+    // is merely disabled (not hidden) since Tor-chaining is meaningful for
+    // more than one protocol but Cloak is meaningful for exactly one.
+    let cloak_expander = gtk::Expander::new(Some("OpenVPN-over-Cloak (censorship circumvention)"));
+    cloak_expander.set_tooltip_text(Some(
+        "Wraps this OpenVPN connection in cbeuw/Cloak's obfuscation layer, disguising it as \
+         ordinary HTTPS to the server name below. Requires a Cloak server you already have \
+         real credentials for.",
+    ));
+    let cloak_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    cloak_box.set_margin_top(6);
+    cloak_box.set_margin_start(12);
+
+    let cloak_remote_host_entry = gtk::Entry::new();
+    cloak_remote_host_entry.set_placeholder_text(Some("remote host (same host the OpenVPN profile's 'remote' points at)"));
+    cloak_box.append(&cloak_remote_host_entry);
+
+    let cloak_remote_port_entry = gtk::Entry::new();
+    cloak_remote_port_entry.set_placeholder_text(Some("remote port"));
+    cloak_box.append(&cloak_remote_port_entry);
+
+    let cloak_public_key_entry = gtk::Entry::new();
+    cloak_public_key_entry.set_placeholder_text(Some("public key (base64, issued by the Cloak server operator)"));
+    cloak_box.append(&cloak_public_key_entry);
+
+    let cloak_uid_entry = gtk::Entry::new();
+    cloak_uid_entry.set_placeholder_text(Some("UID (base64, issued by the Cloak server operator)"));
+    cloak_box.append(&cloak_uid_entry);
+
+    let cloak_server_name_entry = gtk::Entry::new();
+    cloak_server_name_entry.set_placeholder_text(Some("server name to present via SNI/Host, e.g. www.bing.com"));
+    cloak_box.append(&cloak_server_name_entry);
+
+    let cloak_encryption_labels: Vec<&str> = CLOAK_ENCRYPTION_METHODS.to_vec();
+    let cloak_encryption_dropdown = gtk::DropDown::from_strings(&cloak_encryption_labels);
+    cloak_encryption_dropdown.set_selected(0);
+    cloak_box.append(&cloak_encryption_dropdown);
+
+    let cloak_num_conn_entry = gtk::Entry::new();
+    cloak_num_conn_entry.set_placeholder_text(Some("number of connections (optional, default 4)"));
+    cloak_box.append(&cloak_num_conn_entry);
+
+    let cloak_browser_sig_entry = gtk::Entry::new();
+    cloak_browser_sig_entry.set_placeholder_text(Some("TLS fingerprint to mimic (optional, default \"chrome\")"));
+    cloak_box.append(&cloak_browser_sig_entry);
+
+    let cloak_status_label = gtk::Label::new(None);
+    cloak_status_label.set_wrap(true);
+    cloak_status_label.set_halign(gtk::Align::Start);
+    cloak_box.append(&cloak_status_label);
+
+    cloak_expander.set_child(Some(&cloak_box));
+    cloak_expander.set_visible(VPN_PROTOCOLS[0].0 == VpnProtocol::OpenVpn);
+    network_tab.append(&cloak_expander);
+
+    // Cloak and VPN-over-Tor chaining are two different mechanisms for the
+    // same connection — `ConnectViaCloak` has no socks-proxy slot, so
+    // opening the Cloak section and using Tor chaining at once would be
+    // ambiguous. Expanding Cloak wins: it disables (and unchecks) the Tor
+    // checkbox for as long as it stays expanded.
+    cloak_expander.connect_expanded_notify({
+        let connect_via_tor_check = connect_via_tor_check.clone();
+        let vpn_protocol_dropdown = vpn_protocol_dropdown.clone();
+        move |expander| {
+            if expander.is_expanded() {
+                connect_via_tor_check.set_active(false);
+                connect_via_tor_check.set_sensitive(false);
+            } else {
+                let selected = vpn_protocol_dropdown.selected() as usize;
+                let supported = VPN_PROTOCOLS
+                    .get(selected)
+                    .map(|(protocol, _)| protocol_supports_tor_chaining(*protocol))
+                    .unwrap_or(false);
+                connect_via_tor_check.set_sensitive(supported);
+            }
+        }
+    });
+
     vpn_protocol_dropdown.connect_selected_notify({
         let connect_via_tor_check = connect_via_tor_check.clone();
         let vpn_profile_dropdown = vpn_profile_dropdown.clone();
         let vpn_profile_empty_label = vpn_profile_empty_label.clone();
         let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+        let cloak_expander = cloak_expander.clone();
         move |dropdown| {
             let selected = dropdown.selected() as usize;
-            let supported = VPN_PROTOCOLS
-                .get(selected)
-                .map(|(protocol, _)| protocol_supports_tor_chaining(*protocol))
-                .unwrap_or(false);
-            connect_via_tor_check.set_sensitive(supported);
+            let protocol = VPN_PROTOCOLS.get(selected).map(|(protocol, _)| *protocol);
+            let supported = protocol.map(protocol_supports_tor_chaining).unwrap_or(false);
+
+            let is_openvpn = protocol == Some(VpnProtocol::OpenVpn);
+            if !is_openvpn {
+                cloak_expander.set_expanded(false);
+            }
+            cloak_expander.set_visible(is_openvpn);
+
+            connect_via_tor_check.set_sensitive(supported && !cloak_expander.is_expanded());
             if !supported {
                 connect_via_tor_check.set_active(false);
             }
@@ -653,6 +791,268 @@ pub fn build(app: &gtk::Application) {
     vpn_action_row.append(&vpn_connect_btn);
     vpn_action_row.append(&vpn_disconnect_btn);
     network_tab.append(&vpn_action_row);
+
+    network_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    // --- Manage VPN Profiles ---------------------------------------------
+    network_tab.append(&section_heading("Manage VPN Profiles"));
+
+    // - Import Profile -----------------------------------------------------
+    let vpn_import_name_entry = gtk::Entry::new();
+    vpn_import_name_entry.set_placeholder_text(Some("name for the imported profile"));
+    network_tab.append(&vpn_import_name_entry);
+
+    let vpn_import_btn = gtk::Button::with_label("Import Profile from File…");
+    network_tab.append(&vpn_import_btn);
+
+    let vpn_import_status_label = gtk::Label::new(None);
+    vpn_import_status_label.set_wrap(true);
+    vpn_import_status_label.set_halign(gtk::Align::Start);
+    network_tab.append(&vpn_import_status_label);
+
+    vpn_import_btn.connect_clicked({
+        let window = window.clone();
+        let vpn_protocol_dropdown = vpn_protocol_dropdown.clone();
+        let vpn_import_name_entry = vpn_import_name_entry.clone();
+        let vpn_import_status_label = vpn_import_status_label.clone();
+        let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+        let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+        let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+        move |_| {
+            let name = vpn_import_name_entry.text().to_string();
+            if name.trim().is_empty() {
+                vpn_import_status_label.set_label("Enter a name for the imported profile first.");
+                return;
+            }
+            let selected = vpn_protocol_dropdown.selected() as usize;
+            let Some((protocol, protocol_label)) = VPN_PROTOCOLS.get(selected).copied() else {
+                return;
+            };
+
+            let dialog = gtk::FileDialog::builder().title("Import VPN Profile").build();
+            let window = window.clone();
+            let vpn_import_status_label = vpn_import_status_label.clone();
+            let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+            let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+            let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+            dialog.open(Some(&window), gtk::gio::Cancellable::NONE, move |result| {
+                let file = match result {
+                    Ok(file) => file,
+                    Err(e) => {
+                        vpn_import_status_label.set_label(&format!("File selection cancelled: {e}"));
+                        return;
+                    }
+                };
+                let Some(path) = file.path() else {
+                    vpn_import_status_label.set_label("Selected file has no local path.");
+                    return;
+                };
+                // The dashboard runs as the unprivileged desktop user and is
+                // only reading a file that user already has read access to
+                // — the privileged validation/write happens in nyx-vpn over
+                // the socket, per `VpnCommand::ImportProfile`'s own design.
+                let contents = match std::fs::read_to_string(&path) {
+                    Ok(contents) => contents,
+                    Err(e) => {
+                        vpn_import_status_label
+                            .set_label(&format!("Could not read {}: {e}", path.display()));
+                        return;
+                    }
+                };
+
+                vpn_import_status_label.set_label("Importing…");
+                let vpn_import_status_label = vpn_import_status_label.clone();
+                let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+                let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+                let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+                let apply: VpnApplyFn = Rc::new(move |result| match result {
+                    Ok(out) => {
+                        vpn_import_status_label.set_label(&out.message);
+                        if out.data.is_some() {
+                            refresh_vpn_profiles(
+                                protocol,
+                                protocol_label,
+                                vpn_profile_dropdown.clone(),
+                                vpn_profile_empty_label.clone(),
+                                Rc::clone(&vpn_profiles_state),
+                            );
+                        }
+                    }
+                    Err(e) => vpn_import_status_label.set_label(&format!("error: {e}")),
+                });
+                run_vpn_command(
+                    VpnCommand::ImportProfile { protocol, name, contents },
+                    apply,
+                );
+            });
+        }
+    });
+
+    // - Fetch Free Provider --------------------------------------------------
+    let free_provider_labels: Vec<&str> = FREE_PROVIDERS.iter().map(|(_, label)| *label).collect();
+    let vpn_free_provider_dropdown = gtk::DropDown::from_strings(&free_provider_labels);
+    vpn_free_provider_dropdown.set_selected(0);
+    network_tab.append(&vpn_free_provider_dropdown);
+
+    let vpn_free_country_entry = gtk::Entry::new();
+    vpn_free_country_entry.set_placeholder_text(Some("country code, e.g. JP (VPN Gate only, optional)"));
+    network_tab.append(&vpn_free_country_entry);
+
+    vpn_free_provider_dropdown.connect_selected_notify({
+        let vpn_free_country_entry = vpn_free_country_entry.clone();
+        move |dropdown| {
+            let selected = dropdown.selected() as usize;
+            let supported = FREE_PROVIDERS
+                .get(selected)
+                .map(|(provider, _)| free_provider_supports_country(*provider))
+                .unwrap_or(false);
+            vpn_free_country_entry.set_sensitive(supported);
+        }
+    });
+
+    let vpn_fetch_free_btn = gtk::Button::with_label("Fetch Free Provider");
+    network_tab.append(&vpn_fetch_free_btn);
+
+    let vpn_fetch_free_hint = gtk::Label::new(Some(
+        "Clicking sends a real outbound request to the selected provider's own public VPN \
+         directory (VPN Gate or Riseup) to fetch a ready-to-use relay. Never fetched automatically.",
+    ));
+    vpn_fetch_free_hint.add_css_class("hint");
+    vpn_fetch_free_hint.set_halign(gtk::Align::Start);
+    vpn_fetch_free_hint.set_wrap(true);
+    network_tab.append(&vpn_fetch_free_hint);
+
+    let vpn_fetch_free_status_label = gtk::Label::new(None);
+    vpn_fetch_free_status_label.set_wrap(true);
+    vpn_fetch_free_status_label.set_halign(gtk::Align::Start);
+    network_tab.append(&vpn_fetch_free_status_label);
+
+    vpn_fetch_free_btn.connect_clicked({
+        let vpn_free_provider_dropdown = vpn_free_provider_dropdown.clone();
+        let vpn_free_country_entry = vpn_free_country_entry.clone();
+        let vpn_fetch_free_status_label = vpn_fetch_free_status_label.clone();
+        let vpn_protocol_dropdown = vpn_protocol_dropdown.clone();
+        let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+        let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+        let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+        move |_| {
+            let selected = vpn_free_provider_dropdown.selected() as usize;
+            let Some((provider, _)) = FREE_PROVIDERS.get(selected).copied() else {
+                return;
+            };
+            let country_text = vpn_free_country_entry.text().to_string();
+            let country = if free_provider_supports_country(provider) && !country_text.trim().is_empty() {
+                Some(country_text.trim().to_string())
+            } else {
+                None
+            };
+
+            vpn_fetch_free_status_label.set_label("Fetching… (contacting the provider's public API)");
+
+            let vpn_fetch_free_status_label = vpn_fetch_free_status_label.clone();
+            let currently_selected_protocol =
+                VPN_PROTOCOLS.get(vpn_protocol_dropdown.selected() as usize).copied();
+            let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+            let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+            let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+            let apply: VpnApplyFn = Rc::new(move |result| match result {
+                Ok(out) => {
+                    vpn_fetch_free_status_label.set_label(&out.message);
+                    if out.data.is_some() {
+                        // `FetchFreeProvider` always writes an OpenVPN
+                        // profile — only refresh the visible dropdown if
+                        // OpenVPN happens to be selected right now.
+                        if let Some((VpnProtocol::OpenVpn, label)) = currently_selected_protocol {
+                            refresh_vpn_profiles(
+                                VpnProtocol::OpenVpn,
+                                label,
+                                vpn_profile_dropdown.clone(),
+                                vpn_profile_empty_label.clone(),
+                                Rc::clone(&vpn_profiles_state),
+                            );
+                        }
+                    }
+                }
+                Err(e) => vpn_fetch_free_status_label.set_label(&format!("error: {e}")),
+            });
+            run_vpn_command(VpnCommand::FetchFreeProvider { provider, country }, apply);
+        }
+    });
+
+    // - Write Provider Template -----------------------------------------------
+    let template_provider_labels: Vec<&str> = TEMPLATE_PROVIDERS.iter().map(|(_, label)| *label).collect();
+    let vpn_template_provider_dropdown = gtk::DropDown::from_strings(&template_provider_labels);
+    vpn_template_provider_dropdown.set_selected(0);
+    network_tab.append(&vpn_template_provider_dropdown);
+
+    let vpn_template_name_entry = gtk::Entry::new();
+    vpn_template_name_entry.set_placeholder_text(Some("name for the new template profile"));
+    network_tab.append(&vpn_template_name_entry);
+
+    let vpn_write_template_btn = gtk::Button::with_label("Write Template");
+    network_tab.append(&vpn_write_template_btn);
+
+    let vpn_template_status_label = gtk::Label::new(None);
+    vpn_template_status_label.set_wrap(true);
+    vpn_template_status_label.set_halign(gtk::Align::Start);
+    network_tab.append(&vpn_template_status_label);
+
+    vpn_write_template_btn.connect_clicked({
+        let vpn_template_provider_dropdown = vpn_template_provider_dropdown.clone();
+        let vpn_template_name_entry = vpn_template_name_entry.clone();
+        let vpn_template_status_label = vpn_template_status_label.clone();
+        let vpn_protocol_dropdown = vpn_protocol_dropdown.clone();
+        let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+        let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+        let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+        move |_| {
+            let name = vpn_template_name_entry.text().to_string();
+            if name.trim().is_empty() {
+                vpn_template_status_label.set_label("Enter a name for the new profile first.");
+                return;
+            }
+            let selected = vpn_template_provider_dropdown.selected() as usize;
+            let Some((provider, _)) = TEMPLATE_PROVIDERS.get(selected).copied() else {
+                return;
+            };
+
+            let vpn_template_status_label = vpn_template_status_label.clone();
+            let currently_selected_protocol =
+                VPN_PROTOCOLS.get(vpn_protocol_dropdown.selected() as usize).copied();
+            let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+            let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+            let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+            let apply: VpnApplyFn = Rc::new(move |result| match result {
+                Ok(out) => {
+                    vpn_template_status_label.set_label(&out.message);
+                    if out.data.is_some() {
+                        // Mullvad's template is WireGuard, ProtonVPN's and
+                        // NordVPN's are OpenVPN — only refresh the visible
+                        // dropdown if the currently selected protocol
+                        // matches the one this template was actually
+                        // written for.
+                        let template_protocol = match provider {
+                            TemplateProvider::Mullvad => VpnProtocol::WireGuard,
+                            TemplateProvider::ProtonVpn | TemplateProvider::NordVpn => VpnProtocol::OpenVpn,
+                        };
+                        if let Some((protocol, label)) = currently_selected_protocol
+                            && protocol == template_protocol
+                        {
+                            refresh_vpn_profiles(
+                                protocol,
+                                label,
+                                vpn_profile_dropdown.clone(),
+                                vpn_profile_empty_label.clone(),
+                                Rc::clone(&vpn_profiles_state),
+                            );
+                        }
+                    }
+                }
+                Err(e) => vpn_template_status_label.set_label(&format!("error: {e}")),
+            });
+            run_vpn_command(VpnCommand::WriteProviderTemplate { provider, name }, apply);
+        }
+    });
 
     network_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
@@ -1671,19 +2071,90 @@ pub fn build(app: &gtk::Application) {
         let vpn_protocol_dropdown = vpn_protocol_dropdown.clone();
         let connect_via_tor_check = connect_via_tor_check.clone();
         let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+        let cloak_expander = cloak_expander.clone();
+        let cloak_remote_host_entry = cloak_remote_host_entry.clone();
+        let cloak_remote_port_entry = cloak_remote_port_entry.clone();
+        let cloak_public_key_entry = cloak_public_key_entry.clone();
+        let cloak_uid_entry = cloak_uid_entry.clone();
+        let cloak_server_name_entry = cloak_server_name_entry.clone();
+        let cloak_encryption_dropdown = cloak_encryption_dropdown.clone();
+        let cloak_num_conn_entry = cloak_num_conn_entry.clone();
+        let cloak_browser_sig_entry = cloak_browser_sig_entry.clone();
+        let cloak_status_label = cloak_status_label.clone();
+        let window = window.clone();
         move |_| {
             let selected_profile = vpn_profiles_state
                 .borrow()
                 .get(vpn_profile_dropdown.selected() as usize)
                 .cloned();
-            let Some(profile) = selected_profile else {
+            let Some((profile, incomplete)) = selected_profile else {
                 return;
             };
             let selected = vpn_protocol_dropdown.selected() as usize;
             let Some((protocol, _)) = VPN_PROTOCOLS.get(selected).copied() else {
                 return;
             };
-            let cmd = if connect_via_tor_check.is_sensitive() && connect_via_tor_check.is_active() {
+
+            let cmd = if protocol == VpnProtocol::OpenVpn && cloak_expander.is_expanded() {
+                let remote_host = cloak_remote_host_entry.text().to_string();
+                let public_key = cloak_public_key_entry.text().to_string();
+                let uid = cloak_uid_entry.text().to_string();
+                let server_name = cloak_server_name_entry.text().to_string();
+                if remote_host.trim().is_empty()
+                    || public_key.trim().is_empty()
+                    || uid.trim().is_empty()
+                    || server_name.trim().is_empty()
+                {
+                    cloak_status_label.set_label(
+                        "Cloak: remote host, public key, UID, and server name are all required.",
+                    );
+                    return;
+                }
+                let Ok(remote_port) = cloak_remote_port_entry.text().trim().parse::<u16>() else {
+                    cloak_status_label
+                        .set_label("Cloak: remote port must be a valid port number (0-65535).");
+                    return;
+                };
+                let num_conn_text = cloak_num_conn_entry.text().to_string();
+                let num_conn = if num_conn_text.trim().is_empty() {
+                    None
+                } else {
+                    match num_conn_text.trim().parse::<u32>() {
+                        Ok(n) => Some(n),
+                        Err(_) => {
+                            cloak_status_label
+                                .set_label("Cloak: number of connections must be a whole number.");
+                            return;
+                        }
+                    }
+                };
+                let browser_sig_text = cloak_browser_sig_entry.text().to_string();
+                let browser_sig = if browser_sig_text.trim().is_empty() {
+                    None
+                } else {
+                    Some(browser_sig_text.trim().to_string())
+                };
+                let encryption_method = CLOAK_ENCRYPTION_METHODS
+                    .get(cloak_encryption_dropdown.selected() as usize)
+                    .copied()
+                    .unwrap_or("aes-256-gcm")
+                    .to_string();
+
+                cloak_status_label.set_label("");
+                VpnCommand::ConnectViaCloak {
+                    profile,
+                    cloak_config: CloakConfig {
+                        remote_host: remote_host.trim().to_string(),
+                        remote_port,
+                        public_key: public_key.trim().to_string(),
+                        uid: uid.trim().to_string(),
+                        server_name: server_name.trim().to_string(),
+                        encryption_method,
+                        num_conn,
+                        browser_sig,
+                    },
+                }
+            } else if connect_via_tor_check.is_sensitive() && connect_via_tor_check.is_active() {
                 VpnCommand::ConnectViaSocksProxy {
                     protocol,
                     profile,
@@ -1692,7 +2163,29 @@ pub fn build(app: &gtk::Application) {
             } else {
                 VpnCommand::Connect { protocol, profile }
             };
-            run_vpn_command(cmd, Rc::clone(&vpn_apply));
+
+            if incomplete {
+                let vpn_apply = Rc::clone(&vpn_apply);
+                let confirm = gtk::AlertDialog::builder()
+                    .modal(true)
+                    .message("This profile is incomplete")
+                    .detail(
+                        "It still contains an unfilled template placeholder and needs your own \
+                         account credentials before it can connect. Connecting now will most \
+                         likely fail.",
+                    )
+                    .buttons(["Cancel", "Connect Anyway"])
+                    .cancel_button(0)
+                    .default_button(0)
+                    .build();
+                confirm.choose(Some(&window), gtk::gio::Cancellable::NONE, move |response| {
+                    if response == Ok(1) {
+                        run_vpn_command(cmd, vpn_apply);
+                    }
+                });
+            } else {
+                run_vpn_command(cmd, Rc::clone(&vpn_apply));
+            }
         }
     });
 

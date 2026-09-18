@@ -93,6 +93,7 @@ nyx-thunar-integration
 nyx-desktop-sessions
 nyx-dashboard
 nyx-browsers
+nyx-conky
 
 # --- Graphics / display ---
 xorg-server

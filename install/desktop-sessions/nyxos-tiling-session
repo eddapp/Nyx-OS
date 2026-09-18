@@ -29,6 +29,13 @@ xfsettingsd --daemon &
 Thunar --daemon &
 xfce4-panel &
 
+# NyxOS desktop overlay (Conky) — normal XDG autostart is only processed
+# by xfce4-session itself, which this session deliberately never starts
+# (see the top of this file), so the overlay is launched directly here
+# instead of via /etc/xdg/autostart/nyxos-conky.desktop (that entry is
+# scoped to "Nyx Classic" only). Same config either way.
+conky -c /etc/nyx/conky/conky.conf &
+
 # Hand off to i3 as the actual window manager — exec so the display
 # manager/session tracks i3 as this session's main process, rather than
 # leaving this script sitting around as a wrapper.

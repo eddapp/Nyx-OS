@@ -56,10 +56,12 @@ pub const MANIFEST_TARGETS: &[&str] = &[
     "/usr/lib/nyx/thunar/nyx-thunar-hexview.sh",
     "/usr/lib/nyx/thunar/nyx-thunar-entropy.sh",
     "/usr/lib/nyx/thunar/nyx-thunar-compare.sh",
+    "/usr/lib/nyx/conky/nyx-conky-status.sh",
     "/etc/nftables.conf",
     "/etc/tor/torrc",
     "/etc/dnscrypt-proxy/dnscrypt-proxy.toml",
     "/etc/polkit-1/rules.d/90-nyx-dashboard.rules",
+    "/etc/nyx/conky/conky.conf",
 ];
 
 #[derive(Serialize, Deserialize, Default)]

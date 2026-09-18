@@ -22,7 +22,7 @@ WORK_DIR="$PROFILE_DIR/work"
 OUT_DIR="$PROFILE_DIR/out"
 BUILD_PACMAN_CONF="$PROFILE_DIR/pacman.conf.local"
 BLACKARCH_KEY="4345771566D76038C7FEB43863EC0ADBEA87E4E3"
-NYX_PACKAGES=(nyx-health nyx-vpn nyx-identity nyx-devices nyx-telemetry nyx-diagnostics nyx-dns nyx-integrity nyx-wipe nyx-isolation nyx-workflow nyx-hardening nyx-watch nyx-thunar-integration nyx-desktop-sessions nyx-dashboard nyx-browsers mieru mita)
+NYX_PACKAGES=(nyx-health nyx-vpn nyx-identity nyx-devices nyx-telemetry nyx-diagnostics nyx-dns nyx-integrity nyx-wipe nyx-isolation nyx-workflow nyx-hardening nyx-watch nyx-thunar-integration nyx-desktop-sessions nyx-dashboard nyx-browsers nyx-conky mieru mita)
 # shellcheck source=build-aur-packages.sh
 source "$PROFILE_DIR/build-aur-packages.sh"
 # shellcheck source=sign-packages.sh
@@ -67,7 +67,7 @@ if [[ "$PROFILE" == "server" ]]; then
     FILTERED_NYX_PACKAGES=()
     for pkg in "${NYX_PACKAGES[@]}"; do
         case "$pkg" in
-            nyx-dashboard|nyx-thunar-integration|nyx-desktop-sessions|nyx-browsers) continue ;;
+            nyx-dashboard|nyx-thunar-integration|nyx-desktop-sessions|nyx-browsers|nyx-conky) continue ;;
         esac
         FILTERED_NYX_PACKAGES+=("$pkg")
     done
