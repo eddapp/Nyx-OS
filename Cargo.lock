@@ -817,6 +817,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nyx-browsers"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "nyx-core",
+ "tracing",
+]
+
+[[package]]
 name = "nyx-core"
 version = "0.1.0"
 dependencies = [

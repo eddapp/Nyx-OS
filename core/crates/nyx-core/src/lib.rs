@@ -11,8 +11,8 @@ pub use protocol::{
     CpuTelemetry, DeviceModule, DeviceRadio, DevicesCommand, DevicesReport, DiskTelemetry,
     DnsCommand, DnsReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
     IntegrityCommand, IntegrityReport, InterfaceIdentity, KillSwitchLevel,
-    MemoryTelemetry, NetworkInterfaceTelemetry, SecurityState, TelemetryCommand, TelemetryReport,
-    Toggle, VpnCommand, VpnProfile, VpnProtocol, VpnReport, WipeReport, WipeTarget,
+    MemoryTelemetry, NetworkInterfaceTelemetry, SecurityState, SocksProxyAddr, TelemetryCommand,
+    TelemetryReport, Toggle, VpnCommand, VpnProfile, VpnProtocol, VpnReport, WipeReport, WipeTarget,
 };
 
 /// Path of the nyx-health control socket. Owned by root, group `wheel`,

@@ -13,6 +13,7 @@ use zbus::zvariant::OwnedObjectPath;
 trait SystemdManager {
     fn start_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+    fn restart_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
     fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
 }
 
@@ -46,6 +47,20 @@ pub async fn stop_unit(conn: &Connection, unit: &str) -> NyxResult<()> {
         .stop_unit(unit, "replace")
         .await
         .map_err(|e| NyxError::Network(format!("failed to stop {unit}: {e}")))?;
+    Ok(())
+}
+
+/// A real `systemctl restart` equivalent (`RestartUnit`, not a
+/// stop-then-start pair) — used for Tor-over-VPN chaining to force fresh
+/// circuits over a VPN's route. See `HealthCommand::TorRestart`'s doc
+/// comment for why a bare restart was chosen over Tor's control-port
+/// protocol.
+pub async fn restart_unit(conn: &Connection, unit: &str) -> NyxResult<()> {
+    manager(conn)
+        .await?
+        .restart_unit(unit, "replace")
+        .await
+        .map_err(|e| NyxError::Network(format!("failed to restart {unit}: {e}")))?;
     Ok(())
 }
 

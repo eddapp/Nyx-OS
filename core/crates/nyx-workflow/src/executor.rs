@@ -2,11 +2,18 @@ use crate::client;
 use crate::model::{Condition, Workflow, WorkflowCommand};
 use nyx_core::{
     DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
-    IdentityCommand, IdentityReport, IntegrityCommand, IntegrityReport, NyxOutput, Status,
-    Toggle, VpnCommand, VpnReport, DEVICES_SOCKET, DNS_SOCKET, HEALTH_SOCKET, IDENTITY_SOCKET,
-    INTEGRITY_SOCKET, VPN_SOCKET,
+    IdentityCommand, IdentityReport, IntegrityCommand, IntegrityReport, NyxOutput, SocksProxyAddr,
+    Status, Toggle, VpnCommand, VpnReport, DEVICES_SOCKET, DNS_SOCKET, HEALTH_SOCKET,
+    IDENTITY_SOCKET, INTEGRITY_SOCKET, VPN_SOCKET,
 };
 use std::io::Write;
+
+/// Tor's SocksPort, per `iso/airootfs/etc/tor/torrc`'s `SocksPort
+/// 127.0.0.1:9050` line — the only upstream SOCKS proxy VPN-over-Tor
+/// chaining ever points at in this project.
+fn tor_socks_proxy() -> SocksProxyAddr {
+    SocksProxyAddr { host: "127.0.0.1".to_string(), port: 9050 }
+}
 
 pub struct StepResult {
     pub description: String,
@@ -87,6 +94,32 @@ fn apply_browser_policy(label: &str, policy_json: &str) -> (bool, String) {
     }
 }
 
+/// Tor-over-VPN chaining. Restarts `tor.service` so every circuit is
+/// rebuilt from scratch over whatever route currently exists — but only
+/// after independently confirming, right now, that the VPN backend really
+/// does own the default route. A prior workflow step reporting success
+/// only means "nyx-vpn was reachable and didn't error", not that the
+/// tunnel is actually carrying traffic — see `VpnReport.default_route_via_vpn`
+/// and `handler.rs`'s `probe()` in nyx-vpn for how that's derived from a
+/// live route query, not from what nyx-vpn remembers asking for.
+fn restart_tor_over_vpn() -> (bool, String) {
+    let owns_route = match client::call::<VpnCommand, NyxOutput<VpnReport>>(VPN_SOCKET, &VpnCommand::Status) {
+        Ok(out) => out.data.as_ref().map(|d| d.default_route_via_vpn).unwrap_or(false),
+        Err(e) => {
+            return (false, format!("could not confirm VPN route ownership before restarting Tor: {e}"));
+        }
+    };
+    if !owns_route {
+        return (
+            false,
+            "VPN does not currently own the default route — refusing to restart Tor, since any \
+             circuits it rebuilds would just end up on the same route they were already using"
+                .to_string(),
+        );
+    }
+    call_health(HealthCommand::TorRestart)
+}
+
 fn execute(cmd: &WorkflowCommand) -> (bool, String) {
     match cmd {
         WorkflowCommand::Message(text) => {
@@ -102,6 +135,7 @@ fn execute(cmd: &WorkflowCommand) -> (bool, String) {
             call_health(HealthCommand::KillSwitch { level: *level })
         }
         WorkflowCommand::HealthPanic => call_health(HealthCommand::Panic),
+        WorkflowCommand::RestartTorOverVpn => restart_tor_over_vpn(),
         WorkflowCommand::DnsStatus => {
             match client::call::<DnsCommand, NyxOutput<DnsReport>>(DNS_SOCKET, &DnsCommand::Status) {
                 Ok(out) => (matches!(out.status, Status::Ok), out.message),
@@ -135,6 +169,19 @@ fn execute(cmd: &WorkflowCommand) -> (bool, String) {
             match client::call::<VpnCommand, NyxOutput<VpnReport>>(
                 VPN_SOCKET,
                 &VpnCommand::Connect { protocol: *protocol, profile: profile.clone() },
+            ) {
+                Ok(out) => (matches!(out.status, Status::Ok | Status::Warning), out.message),
+                Err(e) => (false, e),
+            }
+        }
+        WorkflowCommand::VpnConnectViaTor { protocol, profile } => {
+            match client::call::<VpnCommand, NyxOutput<VpnReport>>(
+                VPN_SOCKET,
+                &VpnCommand::ConnectViaSocksProxy {
+                    protocol: *protocol,
+                    profile: profile.clone(),
+                    socks_proxy: tor_socks_proxy(),
+                },
             ) {
                 Ok(out) => (matches!(out.status, Status::Ok | Status::Warning), out.message),
                 Err(e) => (false, e),

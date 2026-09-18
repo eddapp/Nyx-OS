@@ -5,6 +5,7 @@ mod hysteria;
 mod openvpn;
 mod route;
 mod shadowsocks;
+mod socks_override;
 mod state;
 mod systemd_ctl;
 mod wireguard;

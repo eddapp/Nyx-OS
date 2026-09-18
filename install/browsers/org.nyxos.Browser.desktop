@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Nyx Browser
+Comment=NyxOS's default hardened everyday browser (Zen Browser, dedicated Nyx profile)
+Exec=/usr/bin/nyx-browser %u
+Icon=zen-browser
+Terminal=false
+StartupNotify=true
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+Keywords=Internet;WWW;Browser;Web;

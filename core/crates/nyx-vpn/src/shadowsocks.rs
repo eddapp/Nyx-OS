@@ -24,7 +24,7 @@
 //! process-alive plus a best-effort local-port reachability check —
 //! `handler.rs` never reports this protocol as `Protected`.
 
-use nyx_core::NyxResult;
+use nyx_core::{NyxError, NyxResult};
 use std::fs;
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
@@ -34,6 +34,10 @@ const PROFILE_DIR: &str = "/etc/shadowsocks-rust";
 
 fn unit_name(profile: &str) -> String {
     format!("shadowsocks-rust@{profile}.service")
+}
+
+fn runtime_config_path(profile: &str) -> String {
+    format!("{}/nyx-vpn-shadowsocks-{profile}-via-tor.json", crate::socks_override::RUNTIME_DIR)
 }
 
 pub fn list_profiles() -> Vec<String> {
@@ -61,7 +65,74 @@ pub async fn up(conn: &Connection, profile: &str) -> NyxResult<()> {
 }
 
 pub async fn down(conn: &Connection, profile: &str) -> NyxResult<()> {
-    crate::systemd_ctl::stop_unit(conn, &unit_name(profile)).await
+    let unit = unit_name(profile);
+    let result = crate::systemd_ctl::stop_unit(conn, &unit).await;
+    // Best-effort: undo any VPN-over-Tor override/runtime config so a
+    // later plain `up()` doesn't silently keep dialing through Tor.
+    crate::socks_override::remove_exec_start_override(&unit);
+    let _ = fs::remove_file(runtime_config_path(profile));
+    let _ = crate::systemd_ctl::reload(conn).await;
+    result
+}
+
+/// VPN-over-Tor chaining. shadowsocks-rust's own `outbound_proxy` config
+/// field (confirmed against its `crates/shadowsocks-service/src/
+/// config.rs`: `SSConfig.outbound_proxy: Option<SSOutboundProxyConfig>`,
+/// accepting either a single `"socks5://host:port"` URL string or an
+/// array for a multi-hop chain — present in shadowsocks-rust 1.25.0, the
+/// version this project ships) routes `sslocal`'s own uplink to the
+/// configured Shadowsocks server through another proxy first.
+///
+/// This reads the profile's own JSON, sets top-level `outbound_proxy` to
+/// a single `socks5://` URL for the given proxy, and writes the result to
+/// a *runtime-only* copy — the profile file on disk is never rewritten.
+/// The vendor-shipped `shadowsocks-rust@.service` unit's `ExecStart=` is
+/// then overridden via a drop-in (see `socks_override.rs`) to run against
+/// that runtime copy instead of the original.
+pub async fn up_via_socks_proxy(
+    conn: &Connection,
+    profile: &str,
+    socks_host: &str,
+    socks_port: u16,
+) -> NyxResult<()> {
+    let original_path = format!("{PROFILE_DIR}/{profile}.json");
+    let contents = fs::read_to_string(&original_path)
+        .map_err(|e| NyxError::Config(format!("reading Shadowsocks profile '{profile}': {e}")))?;
+    let mut config: serde_json::Value = serde_json::from_str(&contents)
+        .map_err(|e| NyxError::Config(format!("parsing Shadowsocks profile '{profile}': {e}")))?;
+    let obj = config
+        .as_object_mut()
+        .ok_or_else(|| NyxError::Config(format!("Shadowsocks profile '{profile}' is not a JSON object")))?;
+    obj.insert(
+        "outbound_proxy".to_string(),
+        serde_json::Value::String(format!("socks5://{socks_host}:{socks_port}")),
+    );
+
+    let runtime_path = runtime_config_path(profile);
+    fs::create_dir_all(crate::socks_override::RUNTIME_DIR)
+        .map_err(|e| NyxError::Config(format!("creating {}: {e}", crate::socks_override::RUNTIME_DIR)))?;
+    let rendered = serde_json::to_vec_pretty(&config).map_err(NyxError::from)?;
+    fs::write(&runtime_path, rendered)
+        .map_err(|e| NyxError::Config(format!("writing runtime Shadowsocks-via-Tor config: {e}")))?;
+
+    let unit = unit_name(profile);
+    let exec_start = format!("/usr/bin/ssservice local --log-without-time -c {runtime_path}");
+    if let Err(e) = crate::socks_override::write_exec_start_override(&unit, &exec_start) {
+        let _ = fs::remove_file(&runtime_path);
+        return Err(e);
+    }
+    if let Err(e) = crate::systemd_ctl::reload(conn).await {
+        crate::socks_override::remove_exec_start_override(&unit);
+        let _ = fs::remove_file(&runtime_path);
+        return Err(e);
+    }
+    if let Err(e) = crate::systemd_ctl::start_unit(conn, &unit).await {
+        crate::socks_override::remove_exec_start_override(&unit);
+        let _ = fs::remove_file(&runtime_path);
+        let _ = crate::systemd_ctl::reload(conn).await;
+        return Err(e);
+    }
+    Ok(())
 }
 
 pub async fn is_active(conn: &Connection, profile: &str) -> NyxResult<bool> {

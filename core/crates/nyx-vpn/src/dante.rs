@@ -41,6 +41,14 @@
 //! module doesn't carry its own DNS resolution, and resolving it wrong
 //! would just move the same "how do I even reach the resolver" bootstrap
 //! problem the bypass route already exists to solve.
+//!
+//! No `up_via_socks_proxy` here, deliberately: `badvpn-tun2socks` takes
+//! exactly one `--socks-server-addr` and has no second/upstream-proxy flag
+//! of its own (checked against its full option list). Chaining this
+//! backend "through Tor" would mean replacing the profile's actual SOCKS5
+//! VPN endpoint with Tor's SocksPort outright, not chaining anything —
+//! there is no real mechanism here, so this is rejected rather than faked.
+//! See `nyx_core::VpnCommand::ConnectViaSocksProxy`.
 
 use nyx_core::{NyxError, NyxResult};
 use std::fs;

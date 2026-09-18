@@ -39,6 +39,10 @@ enum Cmd {
 enum ProtocolArg {
     Wireguard,
     Openvpn,
+    /// Only meaningful for `vpn-over-tor` — see `catalog.rs`.
+    Xray,
+    /// Only meaningful for `vpn-over-tor` — see `catalog.rs`.
+    Shadowsocks,
 }
 
 impl From<ProtocolArg> for VpnProtocol {
@@ -46,6 +50,8 @@ impl From<ProtocolArg> for VpnProtocol {
         match p {
             ProtocolArg::Wireguard => VpnProtocol::WireGuard,
             ProtocolArg::Openvpn => VpnProtocol::OpenVpn,
+            ProtocolArg::Xray => VpnProtocol::Xray,
+            ProtocolArg::Shadowsocks => VpnProtocol::Shadowsocks,
         }
     }
 }
@@ -86,21 +92,41 @@ fn main() {
                 catalog::PARAMETRIZED_WORKFLOW_ID,
                 catalog::PARAMETRIZED_WORKFLOW_DESCRIPTION
             );
+            println!(
+                "{}\t{}",
+                catalog::TOR_OVER_VPN_WORKFLOW_ID,
+                catalog::TOR_OVER_VPN_WORKFLOW_DESCRIPTION
+            );
+            println!(
+                "{}\t{}",
+                catalog::VPN_OVER_TOR_WORKFLOW_ID,
+                catalog::VPN_OVER_TOR_WORKFLOW_DESCRIPTION
+            );
             for p in posture::Posture::all() {
                 println!("{}\t{}", p.id(), p.description());
             }
         }
         Cmd::Run { id, protocol, profile } => {
-            if id == catalog::PARAMETRIZED_WORKFLOW_ID {
+            if id == catalog::PARAMETRIZED_WORKFLOW_ID
+                || id == catalog::TOR_OVER_VPN_WORKFLOW_ID
+                || id == catalog::VPN_OVER_TOR_WORKFLOW_ID
+            {
                 let (Some(protocol), Some(profile)) = (protocol, profile) else {
                     nyx_core::output::print_error(
                         "nyx-workflow",
                         "run",
-                        &format!("{} requires --protocol and --profile", catalog::PARAMETRIZED_WORKFLOW_ID),
+                        &format!("{id} requires --protocol and --profile"),
                     );
                     std::process::exit(1);
                 };
-                run_and_report(catalog::connect_vpn_with_verification(protocol.into(), profile));
+                let workflow = if id == catalog::PARAMETRIZED_WORKFLOW_ID {
+                    catalog::connect_vpn_with_verification(protocol.into(), profile)
+                } else if id == catalog::TOR_OVER_VPN_WORKFLOW_ID {
+                    catalog::tor_over_vpn(protocol.into(), profile)
+                } else {
+                    catalog::vpn_over_tor(protocol.into(), profile)
+                };
+                run_and_report(workflow);
                 return;
             }
 

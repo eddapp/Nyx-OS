@@ -11,6 +11,12 @@
 //! for a bare profile name, not `/etc/wireguard/` — confirmed against
 //! `amneziawg-tools`' own `wg-quick/linux.bash`, which hardcodes that path
 //! rather than reusing `wg-quick`'s.
+//!
+//! No `up_via_socks_proxy` here, deliberately, for the same reason as
+//! `wireguard.rs`: AmneziaWG is still a UDP-only in-kernel tunnel under
+//! its traffic-obfuscation parameters, and Tor's SocksPort is TCP-only
+//! with no SOCKS5 UDP ASSOCIATE support — a protocol-layer limitation,
+//! not a missing feature. See `nyx_core::VpnCommand::ConnectViaSocksProxy`.
 
 use nyx_core::{NyxError, NyxResult};
 use std::fs;

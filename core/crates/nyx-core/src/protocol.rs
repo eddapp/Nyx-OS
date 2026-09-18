@@ -28,6 +28,20 @@ pub enum HealthCommand {
     /// mutually exclusive levels, not an independent toggle — see
     /// [`KillSwitchLevel`] for what each one actually enforces.
     KillSwitch { level: KillSwitchLevel },
+    /// Restart `tor.service` outright, forcing every circuit to be rebuilt
+    /// from scratch. Used for Tor-over-VPN chaining (see nyx-workflow's
+    /// `tor-over-vpn` workflow): once a VPN backend owns the default
+    /// route, Tor's own traffic already flows over it automatically — Tor
+    /// makes no routing decisions of its own — but any circuit built
+    /// *before* the VPN connected may still be using the old route
+    /// underneath. A plain restart is the deliberate choice over Tor's
+    /// authenticated control-port protocol (`ControlPort 9051` +
+    /// `AUTHENTICATE` + `SIGNAL NEWNYM`), which would rebuild circuits
+    /// without the momentary restart blip but means implementing
+    /// cookie/password authentication and a second long-lived control
+    /// connection from scratch for a benefit that's purely about avoiding
+    /// that blip — not worth it here.
+    TorRestart,
 }
 
 /// The kill switch is a ladder of firewall postures, not a single on/off
@@ -242,6 +256,16 @@ pub struct VpnProfile {
     pub name: String,
 }
 
+/// An upstream SOCKS5 proxy — in practice always Tor's SocksPort
+/// (`127.0.0.1:9050`, per `iso/airootfs/etc/tor/torrc`) — that a VPN
+/// backend should dial its own connection to its server through. See
+/// [`VpnCommand::ConnectViaSocksProxy`].
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SocksProxyAddr {
+    pub host: String,
+    pub port: u16,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum VpnCommand {
@@ -255,6 +279,21 @@ pub enum VpnCommand {
     /// already up, it is torn down first — NyxOS never runs two VPN
     /// tunnels at once, to avoid ambiguous routing.
     Connect { protocol: VpnProtocol, profile: String },
+    /// VPN-over-Tor chaining: same as `Connect`, but dials the backend's
+    /// own connection to its server through `socks_proxy` instead of
+    /// directly. Only three backends have a real, upstream-documented way
+    /// to do this and are honored: OpenVPN (`--socks-proxy`, and the
+    /// profile must already specify `proto tcp-client`/`tcp4-client`/
+    /// `tcp6-client` — SOCKS5 only carries TCP), Xray
+    /// (`streamSettings.sockopt.dialerProxy`), and Shadowsocks
+    /// (`outbound_proxy`). WireGuard and AmneziaWG are UDP-only in-kernel
+    /// tunnels, Hysteria2's transport is QUIC (also UDP) with no
+    /// proxy-chaining option of its own, and the SOCKS5/badvpn-tun2socks
+    /// backend has only one upstream-proxy slot with no chaining flag —
+    /// all four are rejected outright with an explanation rather than
+    /// faking support. See `nyx-vpn`'s backend modules for the verified
+    /// details behind each.
+    ConnectViaSocksProxy { protocol: VpnProtocol, profile: String, socks_proxy: SocksProxyAddr },
     /// Tear down whatever is currently up, if anything.
     Disconnect,
 }

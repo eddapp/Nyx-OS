@@ -1,6 +1,8 @@
 use crate::state::AppState;
 use crate::{amneziawg, dante, hysteria, openvpn, route, shadowsocks, wireguard, xray};
 use nyx_core::{NyxOutput, SecurityState, VpnCommand, VpnProfile, VpnProtocol, VpnReport};
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 use zbus::Connection;
 
 const BINARY: &str = "nyx-vpn";
@@ -371,6 +373,94 @@ pub async fn dispatch(conn: &Connection, state: &AppState, cmd: VpnCommand) -> N
                     NyxOutput::ok(BINARY, "connect", detail, Some(report))
                 }
                 Err(e) => NyxOutput::<VpnReport>::err(BINARY, "connect", e),
+            }
+        }
+
+        VpnCommand::ConnectViaSocksProxy { protocol, profile, socks_proxy } => {
+            // "tor.service is active" is a process-liveness claim, not
+            // proof the SocksPort itself is accepting connections yet —
+            // a real TCP connect, not a status check, is the bar every
+            // other verification in this project already holds itself to.
+            let target = format!("{}:{}", socks_proxy.host, socks_proxy.port);
+            let reachable = target
+                .parse::<SocketAddr>()
+                .ok()
+                .map(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(500)).is_ok())
+                .unwrap_or(false);
+            if !reachable {
+                return NyxOutput::<VpnReport>::err(
+                    BINARY,
+                    "connect_via_socks_proxy",
+                    format!(
+                        "upstream SOCKS proxy {target} is not accepting connections — refusing \
+                         to dial through it"
+                    ),
+                );
+            }
+
+            // Never run two tunnels at once — tear down whatever's active first.
+            if let Some((prev_protocol, prev_name)) = state.active.lock().await.clone() {
+                let _ = teardown(conn, prev_protocol, &prev_name).await;
+            }
+
+            let result = match protocol {
+                VpnProtocol::WireGuard | VpnProtocol::AmneziaWg => Err(format!(
+                    "{protocol:?} is a UDP-only in-kernel tunnel — Tor's SocksPort is TCP-only \
+                     (no SOCKS5 UDP ASSOCIATE support), so there is no way to carry it through \
+                     Tor at all; this is a protocol-layer limitation, not a missing feature"
+                )),
+                VpnProtocol::Hysteria2 => Err(
+                    "Hysteria2's transport is QUIC (also UDP-only, so the same SocksPort \
+                     limitation applies), and its client config has no proxy-chaining option \
+                     of its own for reaching its own server through an upstream proxy"
+                        .to_string(),
+                ),
+                VpnProtocol::Socks5 => Err(
+                    "the SOCKS5 backend (badvpn-tun2socks) takes exactly one upstream \
+                     --socks-server-addr with no chaining flag — there is no second hop to \
+                     point at Tor without replacing the profile's own configured SOCKS5 \
+                     endpoint outright"
+                        .to_string(),
+                ),
+                VpnProtocol::OpenVpn => {
+                    if !openvpn::list_profiles().contains(&profile) {
+                        Err(format!("no OpenVPN profile named '{profile}' at /etc/openvpn/client/"))
+                    } else {
+                        openvpn::up_via_socks_proxy(conn, &profile, &socks_proxy.host, socks_proxy.port)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                }
+                VpnProtocol::Xray => {
+                    if !xray::list_profiles().contains(&profile) {
+                        Err(format!("no Xray profile named '{profile}' at /etc/nyx/xray/"))
+                    } else {
+                        xray::up_via_socks_proxy(conn, &profile, &socks_proxy.host, socks_proxy.port)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                }
+                VpnProtocol::Shadowsocks => {
+                    if !shadowsocks::list_profiles().contains(&profile) {
+                        Err(format!(
+                            "no Shadowsocks profile named '{profile}' at /etc/shadowsocks-rust/"
+                        ))
+                    } else {
+                        shadowsocks::up_via_socks_proxy(conn, &profile, &socks_proxy.host, socks_proxy.port)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                }
+            };
+
+            match result {
+                Ok(()) => {
+                    *state.active.lock().await = Some((protocol, profile));
+                    let report = probe(conn, state).await;
+                    let detail = report.detail.clone();
+                    NyxOutput::ok(BINARY, "connect_via_socks_proxy", detail, Some(report))
+                }
+                Err(e) => NyxOutput::<VpnReport>::err(BINARY, "connect_via_socks_proxy", e),
             }
         }
 

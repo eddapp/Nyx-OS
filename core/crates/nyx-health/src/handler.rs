@@ -16,6 +16,7 @@ pub async fn dispatch(
         HealthCommand::Panic => "panic",
         HealthCommand::Tor { .. } => "tor",
         HealthCommand::KillSwitch { .. } => "kill_switch",
+        HealthCommand::TorRestart => "tor_restart",
     };
 
     let mut health = state.health.lock().await;
@@ -64,6 +65,9 @@ pub async fn dispatch(
             health.kill_switch_tunnel_iface = iface;
             health.kill_switch_warning = warn.clone();
             warning = warn;
+        }),
+        HealthCommand::TorRestart => systemd_ctl::restart_unit(conn, TOR_UNIT).await.map(|_| {
+            health.tor_active = true;
         }),
     };
 

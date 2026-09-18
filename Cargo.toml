@@ -15,5 +15,6 @@ members = [
     "core/crates/nyx-workflow",
     "core/crates/nyx-hardening",
     "core/crates/nyx-watch",
+    "core/crates/nyx-browsers",
     "dashboard",
 ]

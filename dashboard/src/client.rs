@@ -3,9 +3,10 @@
 //! blocks the GTK main loop.
 
 use nyx_core::{
-    DevicesCommand, DevicesReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
-    NyxOutput, TelemetryCommand, TelemetryReport, VpnCommand, VpnReport, DEVICES_SOCKET,
-    HEALTH_SOCKET, IDENTITY_SOCKET, TELEMETRY_SOCKET, VPN_SOCKET,
+    DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
+    IdentityCommand, IdentityReport, NyxOutput, TelemetryCommand, TelemetryReport, VpnCommand,
+    VpnReport, DEVICES_SOCKET, DNS_SOCKET, HEALTH_SOCKET, IDENTITY_SOCKET, TELEMETRY_SOCKET,
+    VPN_SOCKET,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -47,4 +48,8 @@ pub fn send_devices(cmd: DevicesCommand) -> Result<NyxOutput<DevicesReport>, Str
 
 pub fn send_telemetry(cmd: TelemetryCommand) -> Result<NyxOutput<TelemetryReport>, String> {
     call(TELEMETRY_SOCKET, &cmd)
+}
+
+pub fn send_dns(cmd: DnsCommand) -> Result<NyxOutput<DnsReport>, String> {
+    call(DNS_SOCKET, &cmd)
 }

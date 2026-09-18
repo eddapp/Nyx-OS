@@ -215,4 +215,34 @@
     <text-files/>
     <video-files/>
   </action>
+
+  <action>
+    <icon>web-browser</icon>
+    <name>Open with Nyx Browser</name>
+    <unique-id>org.nyxos.thunar.open-nyx-browser-1</unique-id>
+    <command>/usr/bin/nyx-browser %f</command>
+    <description>Open the selected HTML file in Nyx Browser</description>
+    <patterns>*.html;*.htm</patterns>
+    <text-files/>
+  </action>
+
+  <action>
+    <icon>web-browser</icon>
+    <name>Open with Nyx Oniux Browser</name>
+    <unique-id>org.nyxos.thunar.open-nyx-oniux-browser-1</unique-id>
+    <command>/usr/bin/nyx-oniux-browser %f</command>
+    <description>Open the selected HTML file in Nyx Oniux Browser (per-app Tor isolation)</description>
+    <patterns>*.html;*.htm</patterns>
+    <text-files/>
+  </action>
+
+  <action>
+    <icon>web-browser</icon>
+    <name>Open with Nyx Tor Browser</name>
+    <unique-id>org.nyxos.thunar.open-nyx-tor-browser-1</unique-id>
+    <command>/usr/bin/nyx-tor-browser %f</command>
+    <description>Open the selected HTML file in Tor Browser</description>
+    <patterns>*.html;*.htm</patterns>
+    <text-files/>
+  </action>
 </actions>

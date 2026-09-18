@@ -7,7 +7,7 @@
 //! limitation, not glossed over: `handler.rs` reports OpenVPN connections
 //! as `Degraded` rather than `Protected` unless both signals line up.
 
-use nyx_core::NyxResult;
+use nyx_core::{NyxError, NyxResult};
 use std::fs;
 
 const PROFILE_DIR: &str = "/etc/openvpn/client";
@@ -50,12 +50,92 @@ pub fn configured_device(profile: &str) -> Option<String> {
     })
 }
 
+/// Parse the `proto <value>` directive out of a profile's config file, if
+/// present. `None` means no explicit `proto` line, which means OpenVPN
+/// defaults to `udp` — a `--socks-proxy` connection needs the profile to
+/// already declare `tcp-client`/`tcp4-client`/`tcp6-client` explicitly, so
+/// this is checked before ever attempting to chain through Tor.
+pub fn configured_proto(profile: &str) -> Option<String> {
+    let path = format!("{PROFILE_DIR}/{profile}.conf");
+    let contents = fs::read_to_string(path).ok()?;
+    contents.lines().find_map(|line| {
+        let line = line.trim();
+        let mut parts = line.split_whitespace();
+        if parts.next()? == "proto" {
+            parts.next().map(str::to_string)
+        } else {
+            None
+        }
+    })
+}
+
 pub async fn up(conn: &zbus::Connection, profile: &str) -> NyxResult<()> {
     crate::systemd_ctl::start_unit(conn, &unit_name(profile)).await
 }
 
+/// VPN-over-Tor chaining. OpenVPN's own `--socks-proxy <host> [<port>]`
+/// client directive (confirmed against `openvpn(8)`) is real and
+/// documented, but SOCKS5 only carries TCP, and `openvpn(8)`'s own
+/// `--bind` entry groups `--socks-proxy` with `--proto tcp-client` and
+/// `--http-proxy` as the options that mean "the peer connection is
+/// established by dialing out over TCP" — so this refuses to run unless
+/// the profile already declares an explicit TCP-client `proto`, rather
+/// than silently overriding the profile's own transport choice.
+///
+/// Implemented as a systemd drop-in on `openvpn-client@<profile>.service`
+/// appending `--socks-proxy` to the vendor unit's own `ExecStart=` (see
+/// `socks_override.rs`) — the profile's `.conf` file itself is never
+/// rewritten.
+pub async fn up_via_socks_proxy(
+    conn: &zbus::Connection,
+    profile: &str,
+    socks_host: &str,
+    socks_port: u16,
+) -> NyxResult<()> {
+    match configured_proto(profile) {
+        Some(proto) if matches!(proto.as_str(), "tcp-client" | "tcp4-client" | "tcp6-client") => {}
+        Some(proto) => {
+            return Err(NyxError::Config(format!(
+                "OpenVPN profile '{profile}' uses 'proto {proto}' — chaining through a SOCKS \
+                 proxy needs the profile to already declare 'proto tcp-client' (or \
+                 tcp4-client/tcp6-client), since SOCKS5 only carries TCP; edit the profile first"
+            )));
+        }
+        None => {
+            return Err(NyxError::Config(format!(
+                "OpenVPN profile '{profile}' has no explicit 'proto' line (defaults to udp) — \
+                 chaining through a SOCKS proxy needs 'proto tcp-client' (or \
+                 tcp4-client/tcp6-client) added to the profile first, since SOCKS5 only carries \
+                 TCP"
+            )));
+        }
+    }
+
+    let unit = unit_name(profile);
+    let exec_start = format!(
+        "/usr/bin/openvpn --suppress-timestamps --nobind --config {profile}.conf --socks-proxy {socks_host} {socks_port}"
+    );
+    crate::socks_override::write_exec_start_override(&unit, &exec_start)?;
+    if let Err(e) = crate::systemd_ctl::reload(conn).await {
+        crate::socks_override::remove_exec_start_override(&unit);
+        return Err(e);
+    }
+    if let Err(e) = crate::systemd_ctl::start_unit(conn, &unit).await {
+        crate::socks_override::remove_exec_start_override(&unit);
+        let _ = crate::systemd_ctl::reload(conn).await;
+        return Err(e);
+    }
+    Ok(())
+}
+
 pub async fn down(conn: &zbus::Connection, profile: &str) -> NyxResult<()> {
-    crate::systemd_ctl::stop_unit(conn, &unit_name(profile)).await
+    let unit = unit_name(profile);
+    let result = crate::systemd_ctl::stop_unit(conn, &unit).await;
+    // Best-effort: undo any VPN-over-Tor override so a later plain
+    // `up()` doesn't silently keep dialing through a stale proxy.
+    crate::socks_override::remove_exec_start_override(&unit);
+    let _ = crate::systemd_ctl::reload(conn).await;
+    result
 }
 
 pub async fn is_active(conn: &zbus::Connection, profile: &str) -> NyxResult<bool> {

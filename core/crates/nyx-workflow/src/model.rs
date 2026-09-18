@@ -14,11 +14,23 @@ pub enum WorkflowCommand {
     HealthTor { on: bool },
     HealthKillSwitch { level: KillSwitchLevel },
     HealthPanic,
+    /// Tor-over-VPN chaining, step two: restart `tor.service`, but only
+    /// once nyx-vpn independently confirms *right now* that the VPN
+    /// backend owns the default route — see `executor.rs`'s
+    /// `restart_tor_over_vpn`, which does that live check itself rather
+    /// than trusting that an earlier step in the same workflow succeeded.
+    RestartTorOverVpn,
     DnsStatus,
     IntegrityStatus,
     IntegrityVerify { quick: bool },
     VpnStatus,
     VpnConnect { protocol: VpnProtocol, profile: String },
+    /// VPN-over-Tor chaining: connect `profile` with its own uplink dialed
+    /// through Tor's SocksPort instead of directly. Only real for
+    /// OpenVPN/Xray/Shadowsocks profiles — see
+    /// `nyx_core::VpnCommand::ConnectViaSocksProxy` and `nyx-vpn`'s
+    /// backend modules for exactly why the rest are rejected.
+    VpnConnectViaTor { protocol: VpnProtocol, profile: String },
     VpnDisconnect,
     IdentityStatus,
     IdentitySetIpv6 { enabled: bool },

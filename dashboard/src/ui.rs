@@ -1,10 +1,11 @@
 use crate::client;
+use crate::diagnostics::{self, DefaultRoute, PublicIpResult};
 use gtk::glib;
 use gtk::prelude::*;
 use nyx_core::{
-    DevicesCommand, DevicesReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
-    KillSwitchLevel, NyxOutput, SecurityState, TelemetryCommand, TelemetryReport, Toggle,
-    VpnCommand, VpnProtocol, VpnReport,
+    DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
+    IdentityCommand, IdentityReport, KillSwitchLevel, NyxOutput, SecurityState, TelemetryCommand,
+    TelemetryReport, Toggle, VpnCommand, VpnProtocol, VpnReport,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -15,6 +16,9 @@ type VpnApplyFn = Rc<dyn Fn(Result<NyxOutput<VpnReport>, String>)>;
 type IdentityApplyFn = Rc<dyn Fn(Result<NyxOutput<IdentityReport>, String>)>;
 type DevicesApplyFn = Rc<dyn Fn(Result<NyxOutput<DevicesReport>, String>)>;
 type TelemetryApplyFn = Rc<dyn Fn(Result<NyxOutput<TelemetryReport>, String>)>;
+type DnsApplyFn = Rc<dyn Fn(Result<NyxOutput<DnsReport>, String>)>;
+type DefaultRouteApplyFn = Rc<dyn Fn(Result<DefaultRoute, String>)>;
+type PublicIpApplyFn = Rc<dyn Fn(Result<PublicIpResult, String>)>;
 
 /// Human-readable byte size, `1.0` == 1024 of the previous unit.
 fn format_bytes(bytes: f64) -> String {
@@ -46,6 +50,7 @@ fn load_css() {
         .dot-soft { background-color: #f1c40f; }
         .dot-medium { background-color: #e67e22; }
         .selected { font-weight: bold; }
+        .hint { font-size: 90%; color: #888888; }
         ",
     );
     gtk::style_context_add_provider_for_display(
@@ -185,6 +190,23 @@ fn run_devices_command(cmd: DevicesCommand, apply: DevicesApplyFn) {
 
 fn run_telemetry_command(cmd: TelemetryCommand, apply: TelemetryApplyFn) {
     run_on_background(cmd, client::send_telemetry, apply);
+}
+
+fn run_dns_command(cmd: DnsCommand, apply: DnsApplyFn) {
+    run_on_background(cmd, client::send_dns, apply);
+}
+
+/// Unprivileged, purely local (`ip route show`) — safe to refresh on the
+/// same timer as the rest of the dashboard, unlike the public-IP check.
+fn run_default_route_command(apply: DefaultRouteApplyFn) {
+    run_on_background((), |_| diagnostics::fetch_default_route(), apply);
+}
+
+/// Sends exactly one outbound request to an external service — only ever
+/// called from the "Check Public IP" button handler, never from the
+/// periodic refresh timer.
+fn run_public_ip_command(apply: PublicIpApplyFn) {
+    run_on_background((), |_| diagnostics::fetch_public_ip(), apply);
 }
 
 pub fn build(app: &gtk::Application) {
@@ -400,6 +422,45 @@ pub fn build(app: &gtk::Application) {
     uptime_label.set_halign(gtk::Align::Start);
     root.append(&uptime_label);
 
+    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    // --- Connection Info -----------------------------------------------
+    root.append(&section_heading("Connection Info"));
+
+    let route_label = gtk::Label::new(Some("Default route: unknown"));
+    route_label.set_halign(gtk::Align::Start);
+    root.append(&route_label);
+
+    let (dns_row, dns_dot, dns_label) = status_row("DNS");
+    root.append(&dns_row);
+
+    let dns_resolver_label = gtk::Label::new(Some("Resolver: unknown"));
+    dns_resolver_label.set_halign(gtk::Align::Start);
+    dns_resolver_label.set_wrap(true);
+    root.append(&dns_resolver_label);
+
+    let dns_detail_label = gtk::Label::new(None);
+    dns_detail_label.set_halign(gtk::Align::Start);
+    dns_detail_label.set_wrap(true);
+    root.append(&dns_detail_label);
+
+    let public_ip_label = gtk::Label::new(Some("Public IP: not checked"));
+    public_ip_label.set_halign(gtk::Align::Start);
+    public_ip_label.set_wrap(true);
+    root.append(&public_ip_label);
+
+    let public_ip_btn = gtk::Button::with_label("Check Public IP");
+    root.append(&public_ip_btn);
+
+    let public_ip_hint = gtk::Label::new(Some(
+        "Clicking sends one live request to an external service (icanhazip.com by default), \
+         which will see this machine's real public IP. Never checked automatically.",
+    ));
+    public_ip_hint.add_css_class("hint");
+    public_ip_hint.set_halign(gtk::Align::Start);
+    public_ip_hint.set_wrap(true);
+    root.append(&public_ip_hint);
+
     let status_label = gtk::Label::new(Some("connecting to nyx-health…"));
     status_label.set_wrap(true);
     status_label.set_halign(gtk::Align::Start);
@@ -590,11 +651,64 @@ pub fn build(app: &gtk::Application) {
             Err(e) => cpu_label.set_label(&format!("error: {e}")),
         });
 
+    let default_route_apply: DefaultRouteApplyFn =
+        Rc::new(move |result: Result<DefaultRoute, String>| match result {
+            Ok(route) => {
+                let text = match (route.interface, route.gateway) {
+                    (Some(iface), Some(gateway)) => format!("Default route: {iface} via {gateway}"),
+                    (Some(iface), None) => format!("Default route: {iface}"),
+                    _ => "Default route: none found".to_string(),
+                };
+                route_label.set_label(&text);
+            }
+            Err(e) => route_label.set_label(&format!("Default route: error ({e})")),
+        });
+
+    let dns_apply: DnsApplyFn = Rc::new(move |result: Result<NyxOutput<DnsReport>, String>| match result {
+        Ok(out) => {
+            if let Some(report) = out.data {
+                set_security_dot(&dns_dot, report.state);
+                dns_label.set_label(&format!(
+                    "DNS: {}",
+                    if report.resolves { "resolving" } else { "not resolving" }
+                ));
+                let resolvers = if report.resolver_addrs.is_empty() {
+                    "none".to_string()
+                } else {
+                    report.resolver_addrs.join(", ")
+                };
+                dns_resolver_label.set_label(&format!(
+                    "Resolver: {resolvers} ({}) — DNSCrypt {}{}",
+                    if report.resolver_is_local { "local" } else { "not local" },
+                    if report.dnscrypt_active { "active" } else { "inactive" },
+                    if report.foreign_listener_on_53 {
+                        " — foreign listener on port 53"
+                    } else {
+                        ""
+                    }
+                ));
+                dns_detail_label.set_label(&report.detail);
+            }
+        }
+        Err(e) => dns_resolver_label.set_label(&format!("Resolver: error ({e})")),
+    });
+
+    let public_ip_label_for_btn = public_ip_label.clone();
+    let public_ip_apply: PublicIpApplyFn =
+        Rc::new(move |result: Result<PublicIpResult, String>| match result {
+            Ok(res) => public_ip_label.set_label(&format!("Public IP: {} (via {})", res.ip, res.endpoint)),
+            Err(e) => public_ip_label.set_label(&format!("Public IP: check failed ({e})")),
+        });
+
     run_command(HealthCommand::Status, Rc::clone(&apply));
     run_vpn_command(VpnCommand::Status, Rc::clone(&vpn_apply));
     run_identity_command(IdentityCommand::Status, Rc::clone(&identity_apply));
     run_devices_command(DevicesCommand::Status, Rc::clone(&devices_apply));
     run_telemetry_command(TelemetryCommand::Status, Rc::clone(&telemetry_apply));
+    run_default_route_command(Rc::clone(&default_route_apply));
+    run_dns_command(DnsCommand::Status, Rc::clone(&dns_apply));
+    // Public IP is deliberately NOT fetched here — only ever on an explicit
+    // click of "Check Public IP" (see `public_ip_btn`'s handler below).
 
     {
         let apply = Rc::clone(&apply);
@@ -602,12 +716,19 @@ pub fn build(app: &gtk::Application) {
         let identity_apply = Rc::clone(&identity_apply);
         let devices_apply = Rc::clone(&devices_apply);
         let telemetry_apply = Rc::clone(&telemetry_apply);
+        let default_route_apply = Rc::clone(&default_route_apply);
+        let dns_apply = Rc::clone(&dns_apply);
         glib::timeout_add_seconds_local(5, move || {
             run_command(HealthCommand::Status, Rc::clone(&apply));
             run_vpn_command(VpnCommand::Status, Rc::clone(&vpn_apply));
             run_identity_command(IdentityCommand::Status, Rc::clone(&identity_apply));
             run_devices_command(DevicesCommand::Status, Rc::clone(&devices_apply));
             run_telemetry_command(TelemetryCommand::Status, Rc::clone(&telemetry_apply));
+            run_default_route_command(Rc::clone(&default_route_apply));
+            run_dns_command(DnsCommand::Status, Rc::clone(&dns_apply));
+            // Public IP stays out of this timer permanently — see the note
+            // above and the button handler below, which is the only place
+            // `run_public_ip_command` is ever called.
             glib::ControlFlow::Continue
         });
     }
@@ -912,6 +1033,17 @@ pub fn build(app: &gtk::Application) {
                 DevicesCommand::RejectUsbGuardDevice { id },
                 Rc::clone(&devices_apply),
             )
+        }
+    });
+
+    // The only place the public-IP check is ever triggered: an explicit
+    // click, never a timer. See `run_public_ip_command`'s doc comment.
+    public_ip_btn.connect_clicked({
+        let public_ip_apply = Rc::clone(&public_ip_apply);
+        let public_ip_label_for_btn = public_ip_label_for_btn.clone();
+        move |_| {
+            public_ip_label_for_btn.set_label("Public IP: checking… (contacting external service)");
+            run_public_ip_command(Rc::clone(&public_ip_apply));
         }
     });
 }

@@ -22,6 +22,16 @@
 //! Lifecycle is a templated systemd unit (`nyx-vpn-hysteria@<name>.service`,
 //! see `packaging/`), for real process supervision rather than nyx-vpn
 //! babysitting a raw child process.
+//!
+//! No `up_via_socks_proxy` here, deliberately: Hysteria2's transport is
+//! QUIC, which is UDP, so the same TCP-only-SocksPort limitation
+//! documented in `wireguard.rs`/`amneziawg.rs` applies. It also has no
+//! proxy-chaining option of its own for reaching its own server through
+//! an upstream proxy — confirmed against upstream `apernet/hysteria`'s
+//! `app/cmd/client.go` `clientConfig` struct, whose only proxy-shaped
+//! fields (`socks5`/`http`) are *inbound* listeners for other local
+//! applications, not an outbound dialer. Both reasons independently
+//! exclude it. See `nyx_core::VpnCommand::ConnectViaSocksProxy`.
 
 use nyx_core::NyxResult;
 use std::fs;

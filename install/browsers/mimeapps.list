@@ -1,0 +1,6 @@
+[Default Applications]
+text/html=org.nyxos.Browser.desktop
+text/xml=org.nyxos.Browser.desktop
+application/xhtml+xml=org.nyxos.Browser.desktop
+x-scheme-handler/http=org.nyxos.Browser.desktop
+x-scheme-handler/https=org.nyxos.Browser.desktop

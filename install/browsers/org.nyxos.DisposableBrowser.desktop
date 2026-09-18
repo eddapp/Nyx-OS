@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Nyx Disposable Browser
+Comment=Single-use Zen Browser session with a securely-erased ephemeral profile
+Exec=/usr/bin/nyx-disposable-browser %u
+Icon=zen-browser
+Terminal=false
+StartupNotify=true
+Categories=Network;WebBrowser;
+Keywords=Internet;WWW;Browser;Web;Ephemeral;Private;

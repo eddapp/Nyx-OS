@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Nyx Oniux Browser
+Comment=Zen Browser under oniux per-application Tor isolation (experimental)
+Exec=/usr/bin/nyx-oniux-browser %u
+Icon=zen-browser
+Terminal=false
+StartupNotify=true
+Categories=Network;WebBrowser;
+Keywords=Internet;WWW;Browser;Web;Tor;Anonymity;

@@ -41,6 +41,10 @@ AUR_PACKAGES=(
     amneziawg-tools
     amneziawg-dkms
     hysteria-bin
+    # oniux builds from source via cargo (its own makedepends are 'cargo'
+    # 'git', not a prebuilt tarball like the -bin packages above), so it's
+    # slower through this same makepkg loop — expected, not a problem.
+    oniux
 )
 
 # build_aur_packages <local_repo_dir>

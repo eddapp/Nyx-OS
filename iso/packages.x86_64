@@ -44,7 +44,6 @@ openvpn
 xray
 shadowsocks-rust
 badvpn
-macchanger
 iproute2
 iputils
 traceroute
@@ -53,6 +52,19 @@ curl
 # --- Privacy stack (control layer targets) ---
 tor
 dnscrypt-proxy
+
+# --- Second anonymity network, alongside Tor. Ships its own systemd unit
+# (i2pd.service) with sane upstream defaults; deliberately not enabled by
+# default or wired into nyx-health — most users run one anonymity network
+# at a time, and Tor already owns that role here. Available to opt into. ---
+i2pd
+
+# --- Encrypted-container volumes (VeraCrypt-style), distinct from
+# gocryptfs's filesystem-level encryption. Official 'extra' package, ships
+# its own GUI and CLI (`veracrypt`/`veracrypt-nogui`) — not wrapped in a
+# Nyx-native CLI, that would just be the "overlapping duplicate tool"
+# problem this project deliberately avoids elsewhere. ---
+veracrypt
 
 # --- NyxOS control layer (built from install/pkgbuild/, see build.sh) ---
 nyx-health
@@ -71,6 +83,7 @@ nyx-watch
 nyx-thunar-integration
 nyx-desktop-sessions
 nyx-dashboard
+nyx-browsers
 
 # --- Graphics / display ---
 xorg-server
@@ -104,6 +117,12 @@ zen-browser-bin
 # Tor Browser — ships directly from the already-enabled [blackarch] repo,
 # no separate download-on-first-run launcher needed.
 tor-browser
+
+# oniux — real per-application Tor isolation tool (Tor Project,
+# MIT/Apache-2.0), no official/BlackArch package, built from AUR via
+# iso/build-aur-packages.sh into the same local [nyxos] repo, exactly like
+# zen-browser-bin.
+oniux
 
 # --- Mandatory access control (AppArmor) — Zen's profile at
 # iso/airootfs/etc/apparmor.d/usr.bin.zen-browser, enabled via the

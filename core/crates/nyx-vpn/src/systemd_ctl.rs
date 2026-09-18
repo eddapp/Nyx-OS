@@ -14,6 +14,7 @@ trait SystemdManager {
     fn start_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
     fn get_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
+    fn reload(&self) -> zbus::Result<()>;
 }
 
 #[zbus::proxy(
@@ -46,6 +47,18 @@ pub async fn stop_unit(conn: &Connection, unit: &str) -> NyxResult<()> {
         .stop_unit(unit, "replace")
         .await
         .map_err(|e| NyxError::Network(format!("failed to stop {unit}: {e}")))?;
+    Ok(())
+}
+
+/// The D-Bus equivalent of `systemctl daemon-reload` — needed after
+/// writing or removing a unit drop-in (see `socks_override.rs`) for
+/// systemd to notice it before the next `start_unit`/`stop_unit`.
+pub async fn reload(conn: &Connection) -> NyxResult<()> {
+    manager(conn)
+        .await?
+        .reload()
+        .await
+        .map_err(|e| NyxError::Network(format!("failed to reload systemd manager: {e}")))?;
     Ok(())
 }
 

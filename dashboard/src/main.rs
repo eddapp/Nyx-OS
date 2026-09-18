@@ -1,4 +1,5 @@
 mod client;
+mod diagnostics;
 mod ui;
 
 use gtk::glib;

@@ -1,0 +1,45 @@
+# Maintainer: NyxOS
+# Builds straight from this monorepo's Cargo workspace — no source= tarball,
+# $startdir is install/pkgbuild/nyx-browsers so three levels up is the repo root.
+#
+# Four unprivileged, one-shot launcher binaries (no daemon, no socket) for
+# NyxOS's four-browser lineup: Nyx Browser (hardened everyday Zen Browser,
+# own persistent profile), Nyx Oniux Browser (Zen Browser under real
+# per-app Tor isolation via oniux, own persistent profile), Nyx Tor
+# Browser (thin launcher around the unmodified tor-browser package — no
+# profile of its own, on purpose), and Nyx Disposable Browser (ephemeral
+# Zen Browser profile, securely erased with secure-delete's srm on exit).
+pkgname=nyx-browsers
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NyxOS's four-browser lineup: Nyx Browser, Nyx Oniux Browser, Nyx Tor Browser, Nyx Disposable Browser"
+arch=('x86_64')
+license=('MIT')
+depends=('zen-browser-bin' 'oniux' 'tor-browser' 'secure-delete')
+makedepends=('cargo')
+
+_repo_root="$startdir/../../.."
+_browsers_dir="$_repo_root/install/browsers"
+
+build() {
+  cd "$_repo_root"
+  cargo build --release --locked -p nyx-browsers --target-dir "$srcdir/target"
+}
+
+package() {
+  for bin in nyx-browser nyx-oniux-browser nyx-tor-browser nyx-disposable-browser; do
+    install -Dm755 "$srcdir/target/release/$bin" "$pkgdir/usr/bin/$bin"
+  done
+
+  for entry in org.nyxos.Browser org.nyxos.OniuxBrowser org.nyxos.TorBrowser org.nyxos.DisposableBrowser; do
+    install -Dm644 "$_browsers_dir/$entry.desktop" \
+      "$pkgdir/usr/share/applications/$entry.desktop"
+  done
+
+  # System-wide default-apps policy (freedesktop mime-apps-spec): sets Nyx
+  # Browser as the default handler for HTML/HTTP/HTTPS. $XDG_CONFIG_HOME's
+  # own mimeapps.list (if a user creates one) is still consulted first and
+  # can override this per-user, exactly per spec.
+  install -Dm644 "$_browsers_dir/mimeapps.list" \
+    "$pkgdir/etc/xdg/mimeapps.list"
+}

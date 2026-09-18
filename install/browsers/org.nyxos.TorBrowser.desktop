@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Nyx Tor Browser
+Comment=Launches the unmodified Tor Browser -- no Nyx hardening applied
+Exec=/usr/bin/nyx-tor-browser %u
+Icon=tor-browser
+Terminal=false
+StartupNotify=true
+Categories=Network;WebBrowser;
+Keywords=Internet;WWW;Browser;Web;Tor;Anonymity;

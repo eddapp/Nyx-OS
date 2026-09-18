@@ -1,6 +1,14 @@
 //! WireGuard backend — `wg-quick` for lifecycle, `wg show` for real state.
 //! `wg-quick up <name>` names the interface after the profile, so there is
 //! never any guessing about which interface a given profile becomes.
+//!
+//! No `up_via_socks_proxy` here, deliberately: WireGuard is a UDP-only
+//! in-kernel tunnel, and Tor's SocksPort is TCP-only — it does not
+//! implement the SOCKS5 UDP ASSOCIATE command (confirmed against
+//! `tor(1)`'s own `SocksPort` documentation, which describes it purely as
+//! a stream/TCP proxy). There is no way to carry a UDP tunnel through a
+//! TCP-only SOCKS proxy at all; this is a protocol-layer limitation, not a
+//! missing feature. See `nyx_core::VpnCommand::ConnectViaSocksProxy`.
 
 use nyx_core::{NyxError, NyxResult};
 use std::fs;
