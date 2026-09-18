@@ -5,11 +5,12 @@
 pkgname=nyx-thunar-integration
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="NyxOS Thunar context-menu integration (secure wipe, sandbox shell, metadata strip, checksum, root open, copy path)"
+pkgdesc="NyxOS Thunar context-menu integration (secure wipe, sandbox shell, metadata strip, checksum, root open, copy path, GPG/OpenSSL encrypt-decrypt-sign-verify, hex view, entropy analysis, file compare)"
 arch=('any')
 license=('MIT')
-depends=('thunar' 'zenity' 'mat2' 'polkit' 'nyx-wipe' 'nyx-isolation')
-optdepends=('xclip: clipboard support for Copy Path' 'libnotify: desktop notifications on completion')
+depends=('thunar' 'zenity' 'mat2' 'polkit' 'gnupg' 'openssl' 'nyx-wipe' 'nyx-isolation')
+optdepends=('xclip: clipboard support for Copy Path' 'libnotify: desktop notifications on completion'
+            'vim: provides xxd for Hex View' 'ent: entropy analysis' 'xfce4-terminal: paged Hex View output')
 
 _repo_root="$startdir/../../.."
 _thunar_dir="$_repo_root/install/thunar"
@@ -21,7 +22,8 @@ package() {
   install -Dm644 "$_thunar_dir/nyx-thunar-common.sh" \
     "$pkgdir/usr/lib/nyx/thunar/nyx-thunar-common.sh"
 
-  for script in wipe sandbox metadata checksum root copy-path; do
+  for script in wipe sandbox metadata checksum root copy-path \
+      gpg-encrypt gpg-decrypt gpg-sign gpg-verify openssl hexview entropy compare; do
     install -Dm755 "$_thunar_dir/nyx-thunar-$script.sh" \
       "$pkgdir/usr/lib/nyx/thunar/nyx-thunar-$script.sh"
   done

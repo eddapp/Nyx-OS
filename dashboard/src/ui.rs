@@ -353,6 +353,27 @@ pub fn build(app: &gtk::Application) {
         root.append(row);
     }
 
+    let usbguard_devices_label = gtk::Label::new(None);
+    usbguard_devices_label.set_wrap(true);
+    usbguard_devices_label.set_halign(gtk::Align::Start);
+    root.append(&usbguard_devices_label);
+
+    let usbguard_refresh_btn = gtk::Button::with_label("Refresh connected devices");
+    root.append(&usbguard_refresh_btn);
+
+    let usbguard_device_entry = gtk::Entry::new();
+    usbguard_device_entry.set_placeholder_text(Some("device rule ID (from list above)"));
+    root.append(&usbguard_device_entry);
+
+    let usbguard_device_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let usbguard_allow_btn = gtk::Button::with_label("Allow");
+    let usbguard_allow_permanent_btn = gtk::Button::with_label("Allow permanently");
+    let usbguard_reject_btn = gtk::Button::with_label("Reject");
+    usbguard_device_row.append(&usbguard_allow_btn);
+    usbguard_device_row.append(&usbguard_allow_permanent_btn);
+    usbguard_device_row.append(&usbguard_reject_btn);
+    root.append(&usbguard_device_row);
+
     root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     // --- Telemetry ---------------------------------------------------------
@@ -500,6 +521,11 @@ pub fn build(app: &gtk::Application) {
                     usbguard_label
                         .set_label(&format!("USBGuard: {}", on_off(report.usbguard_active)));
                     devices_detail_label.set_label(&report.detail);
+                    if report.usbguard_live_devices.is_empty() {
+                        usbguard_devices_label.set_label("no connected devices reported");
+                    } else {
+                        usbguard_devices_label.set_label(&report.usbguard_live_devices.join("\n"));
+                    }
                 }
             }
             Err(e) => devices_detail_label.set_label(&format!("error: {e}")),
@@ -836,6 +862,54 @@ pub fn build(app: &gtk::Application) {
         move |_| {
             run_devices_command(
                 DevicesCommand::SetUsbGuard { enabled: false },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    usbguard_refresh_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        move |_| {
+            run_devices_command(DevicesCommand::ListUsbGuardDevices, Rc::clone(&devices_apply))
+        }
+    });
+    usbguard_allow_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        let usbguard_device_entry = usbguard_device_entry.clone();
+        move |_| {
+            let id = usbguard_device_entry.text().to_string();
+            if id.trim().is_empty() {
+                return;
+            }
+            run_devices_command(
+                DevicesCommand::AllowUsbGuardDevice { id, permanent: false },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    usbguard_allow_permanent_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        let usbguard_device_entry = usbguard_device_entry.clone();
+        move |_| {
+            let id = usbguard_device_entry.text().to_string();
+            if id.trim().is_empty() {
+                return;
+            }
+            run_devices_command(
+                DevicesCommand::AllowUsbGuardDevice { id, permanent: true },
+                Rc::clone(&devices_apply),
+            )
+        }
+    });
+    usbguard_reject_btn.connect_clicked({
+        let devices_apply = Rc::clone(&devices_apply);
+        let usbguard_device_entry = usbguard_device_entry.clone();
+        move |_| {
+            let id = usbguard_device_entry.text().to_string();
+            if id.trim().is_empty() {
+                return;
+            }
+            run_devices_command(
+                DevicesCommand::RejectUsbGuardDevice { id },
                 Rc::clone(&devices_apply),
             )
         }

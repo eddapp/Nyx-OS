@@ -369,6 +369,19 @@ pub enum DevicesCommand {
     /// input path at once, so this is done at the audio-server level.
     SetMicrophone { enabled: bool },
     SetUsbGuard { enabled: bool },
+    /// Live device list from USBGuard's own IPC socket (`usbguard
+    /// list-devices`) — currently-connected devices with their assigned
+    /// rule IDs and attributes, not just the static policy file.
+    ListUsbGuardDevices,
+    /// Interactively authorizes one currently-connected device by the rule
+    /// ID USBGuard assigned it (as shown by `ListUsbGuardDevices`).
+    /// `permanent: true` also appends a matching rule to the policy file
+    /// (`usbguard allow-device -p`) so the decision survives replug/reboot;
+    /// `false` is a one-time allow for this connection only.
+    AllowUsbGuardDevice { id: String, permanent: bool },
+    /// Interactively rejects (disconnects) one currently-connected device
+    /// by its USBGuard-assigned rule ID.
+    RejectUsbGuardDevice { id: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
@@ -396,6 +409,11 @@ pub struct DevicesReport {
     pub usbguard_policy: Vec<String>,
     /// Recent USBGuard connect/disconnect journal lines, if any.
     pub usbguard_history: Vec<String>,
+    /// Live, currently-connected devices from USBGuard's own IPC socket
+    /// (`usbguard list-devices`) — one raw line per device, including the
+    /// rule ID needed to allow/reject it. Empty if USBGuard isn't running
+    /// or the IPC call failed.
+    pub usbguard_live_devices: Vec<String>,
     /// Summarizes USB authorization posture specifically: USBGuard active
     /// and default-deny means Protected. Radio/webcam/mic toggles are plain
     /// user settings and don't factor into this.

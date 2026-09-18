@@ -4,7 +4,7 @@
 //! is running".
 
 use crate::systemd_ctl;
-use nyx_core::NyxResult;
+use nyx_core::{NyxError, NyxResult};
 use std::fs;
 use std::process::Command;
 use zbus::Connection;
@@ -66,4 +66,63 @@ pub fn recent_history(limit: usize) -> Vec<String> {
         }
         _ => Vec::new(),
     }
+}
+
+/// Currently-connected devices from USBGuard's own live IPC view (`usbguard
+/// list-devices`), not the static policy file — each line includes the
+/// rule ID USBGuard assigned this connection, which `allow_device`/
+/// `reject_device` take. Requires the daemon to actually be running and
+/// the caller to be in its IPC-allowed group (root, here); an empty
+/// result on failure is indistinguishable from "no devices connected", but
+/// callers already treat `usbguard_active` as the source of truth for
+/// whether USBGuard is reachable at all.
+pub fn list_devices() -> Vec<String> {
+    let output = Command::new("usbguard").args(["list-devices"]).output();
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).lines().map(str::to_string).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Interactively authorizes one currently-connected device by the rule ID
+/// USBGuard assigned it (as listed by `list_devices`). `permanent: true`
+/// also appends a matching rule to the policy file (`-p`) so the decision
+/// survives replug/reboot; otherwise it's a one-time allow for this
+/// connection only.
+pub fn allow_device(id: &str, permanent: bool) -> NyxResult<()> {
+    let mut args = vec!["allow-device", id];
+    if permanent {
+        args.push("-p");
+    }
+    let output = Command::new("usbguard")
+        .args(&args)
+        .output()
+        .map_err(|e| NyxError::Config(format!("failed to spawn usbguard: {e}")))?;
+    if !output.status.success() {
+        return Err(NyxError::Config(format!(
+            "usbguard allow-device {id} exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Interactively rejects (disconnects) one currently-connected device by
+/// its USBGuard-assigned rule ID.
+pub fn reject_device(id: &str) -> NyxResult<()> {
+    let output = Command::new("usbguard")
+        .args(["reject-device", id])
+        .output()
+        .map_err(|e| NyxError::Config(format!("failed to spawn usbguard: {e}")))?;
+    if !output.status.success() {
+        return Err(NyxError::Config(format!(
+            "usbguard reject-device {id} exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
 }

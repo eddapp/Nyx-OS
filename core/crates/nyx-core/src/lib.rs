@@ -56,3 +56,13 @@ pub const DEVICES_SOCKET: &str = "/run/nyx/devices.sock";
 /// directory it can't write to. World-readable: CPU/RAM/network numbers
 /// aren't a security boundary.
 pub const TELEMETRY_SOCKET: &str = "/run/nyx-telemetry/telemetry.sock";
+
+/// Where `nyx-isolation`'s Podman container runtime pins the workbench
+/// sandbox image's expected digest. Written once, root-owned, by
+/// `core/crates/nyx-isolation/containers/build-workbench.sh` (or the
+/// equivalent `nyx-isolation container build-image` maintenance path) —
+/// world-readable so the otherwise-always-unprivileged `nyx-isolation` CLI
+/// can verify the locally loaded image against it before every single
+/// container launch, the same trust-on-first-use shape as
+/// [`INTEGRITY_MANIFEST_PATH`].
+pub const WORKBENCH_IMAGE_METADATA_PATH: &str = "/etc/nyx/workbench-image.json";

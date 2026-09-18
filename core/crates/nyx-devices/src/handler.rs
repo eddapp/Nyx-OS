@@ -44,6 +44,7 @@ async fn report(conn: &Connection) -> DevicesReport {
         usb_devices: usb::devices(),
         usbguard_policy: usbguard::policy_lines(),
         usbguard_history: usbguard::recent_history(20),
+        usbguard_live_devices: usbguard::list_devices(),
         state,
         detail,
     }
@@ -103,6 +104,36 @@ pub async fn dispatch(conn: &Connection, cmd: DevicesCommand) -> NyxOutput<Devic
                 NyxOutput::ok(BINARY, "set_usbguard", format!("USBGuard {word}"), Some(r))
             }
             Err(e) => NyxOutput::<DevicesReport>::err(BINARY, "set_usbguard", e.to_string()),
+        },
+
+        DevicesCommand::ListUsbGuardDevices => {
+            let r = report(conn).await;
+            let count = r.usbguard_live_devices.len();
+            NyxOutput::ok(BINARY, "list_usbguard_devices", format!("{count} device(s) connected"), Some(r))
+        }
+
+        DevicesCommand::AllowUsbGuardDevice { id, permanent } => {
+            match usbguard::allow_device(&id, permanent) {
+                Ok(()) => {
+                    let r = report(conn).await;
+                    let word = if permanent { "permanently allowed" } else { "allowed" };
+                    NyxOutput::ok(
+                        BINARY,
+                        "allow_usbguard_device",
+                        format!("device {id} {word}"),
+                        Some(r),
+                    )
+                }
+                Err(e) => NyxOutput::<DevicesReport>::err(BINARY, "allow_usbguard_device", e.to_string()),
+            }
+        }
+
+        DevicesCommand::RejectUsbGuardDevice { id } => match usbguard::reject_device(&id) {
+            Ok(()) => {
+                let r = report(conn).await;
+                NyxOutput::ok(BINARY, "reject_usbguard_device", format!("device {id} rejected"), Some(r))
+            }
+            Err(e) => NyxOutput::<DevicesReport>::err(BINARY, "reject_usbguard_device", e.to_string()),
         },
     }
 }
