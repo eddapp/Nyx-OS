@@ -301,6 +301,63 @@ pub enum VpnProtocol {
 pub struct VpnProfile {
     pub protocol: VpnProtocol,
     pub name: String,
+    /// True when this profile still contains an unfilled
+    /// `WriteProviderTemplate` placeholder — `nyx-vpn`'s own `List`/`Status`
+    /// flags it so a caller can tell "not yet usable" from "ready to
+    /// connect" without trying it and getting a confusing failure.
+    /// `#[serde(default)]` so a profile reported by an older wire peer
+    /// (before this field existed) still deserializes.
+    #[serde(default)]
+    pub incomplete: bool,
+}
+
+/// A curated, genuinely free-of-charge public VPN directory — no account,
+/// no credentials, no payment, ever. Deliberately just these two: every
+/// other widely-known "free VPN" either requires signup, caps
+/// bandwidth/time, or isn't actually free end-to-end — these are the real
+/// exceptions. See `nyx-vpn`'s `free_provider` module for the verified API
+/// details behind each.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FreeProvider {
+    /// University of Tsukuba's VPN Gate academic relay project — a public
+    /// CSV directory of volunteer-run relays
+    /// (`https://www.vpngate.net/api/iphone/`), each entry already
+    /// carrying a ready-to-use base64-encoded OpenVPN config. No account
+    /// of any kind.
+    VpnGate,
+    /// Riseup Networks' donation-funded VPN — `api.black.riseup.net`
+    /// issues a real, immediately usable OpenVPN client certificate with
+    /// zero signup (`/3/cert` for the client cert+key, `/3/config/
+    /// eip-service.json` for the gateway list and OpenVPN parameters).
+    Riseup,
+}
+
+/// A commercial VPN provider NyxOS cannot embed a real paid account for —
+/// but can still write a real, correctly-shaped config skeleton for, with
+/// an obvious placeholder over exactly the field(s) that need the user's
+/// own account. Deliberately just these three. See `nyx-vpn`'s `templates`
+/// module for the verified format details behind each.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TemplateProvider {
+    /// WireGuard skeleton — real shape confirmed against Mullvad's own
+    /// public WireGuard relay directory (`api.mullvad.net`): internal
+    /// resolver `10.64.0.1`, port `51820`, relay hostnames of the form
+    /// `<code>-<city>-wg-<NNN>.relays.mullvad.net`. `PrivateKey` and the
+    /// account-assigned tunnel `Address` are the placeholders — both are
+    /// generated per-account by Mullvad, not something NyxOS can supply.
+    Mullvad,
+    /// OpenVPN skeleton — ProtonVPN issues a separate OpenVPN/IKEv2
+    /// username+password per account (distinct from the account login)
+    /// plus per-server `<ca>`/`<tls-crypt>` material downloaded from the
+    /// logged-in account. Both are the placeholders here.
+    ProtonVpn,
+    /// OpenVPN skeleton — NordVPN publishes a public, unauthenticated
+    /// server-list API (`api.nordvpn.com/v1/servers`) but still requires a
+    /// separate per-account OpenVPN service credential (distinct from the
+    /// account login), which is the placeholder here.
+    NordVpn,
 }
 
 /// An upstream SOCKS5 proxy — in practice always Tor's SocksPort
@@ -343,6 +400,35 @@ pub enum VpnCommand {
     ConnectViaSocksProxy { protocol: VpnProtocol, profile: String, socks_proxy: SocksProxyAddr },
     /// Tear down whatever is currently up, if anything.
     Disconnect,
+    /// Validate and install a caller-supplied config as a new profile for
+    /// `protocol`, named `name`. Contents travel over the socket as bytes
+    /// rather than a filesystem path: the caller is normally unprivileged
+    /// and has no write access to `protocol`'s root-owned profile
+    /// directory, so the root daemon takes the data and performs the
+    /// privileged write itself — the same "caller supplies data, daemon
+    /// does the privileged write" shape every other mutating command here
+    /// already uses (contrast a path-based design, which would require
+    /// either the unprivileged caller already having filesystem access it
+    /// doesn't have, or the daemon trusting a path it didn't write).
+    /// Rejected with a clear error if `contents` doesn't parse as a
+    /// well-formed profile for `protocol` — a real protocol-shaped check,
+    /// not just "the write succeeded".
+    ImportProfile { protocol: VpnProtocol, name: String, contents: String },
+    /// Fetch a relay/gateway from a curated, genuinely free public VPN
+    /// directory and write it as a ready-to-use OpenVPN profile at
+    /// `/etc/openvpn/client/` — zero account, zero further user action.
+    /// This makes a real outbound HTTPS request to the named provider's
+    /// own public API; `nyx-vpn` logs that plainly rather than hiding it.
+    /// `country` (an ISO 3166-1 alpha-2 code) narrows `FreeProvider::
+    /// VpnGate`'s relay choice to the highest-bandwidth match; ignored for
+    /// `FreeProvider::Riseup`, which has no country selection of its own.
+    FetchFreeProvider { provider: FreeProvider, country: Option<String> },
+    /// Write a real, correctly-shaped (but incomplete) config skeleton for
+    /// a commercial provider NyxOS cannot embed a real paid account for —
+    /// see [`TemplateProvider`]. The written profile is flagged
+    /// `incomplete` by `List`/`Status` until the user replaces its
+    /// placeholder(s) with their own account's real values.
+    WriteProviderTemplate { provider: TemplateProvider, name: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]

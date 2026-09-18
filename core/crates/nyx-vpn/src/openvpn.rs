@@ -10,7 +10,7 @@
 use nyx_core::{NyxError, NyxResult};
 use std::fs;
 
-const PROFILE_DIR: &str = "/etc/openvpn/client";
+pub(crate) const PROFILE_DIR: &str = "/etc/openvpn/client";
 
 fn unit_name(profile: &str) -> String {
     format!("openvpn-client@{profile}.service")
@@ -67,6 +67,12 @@ pub fn configured_proto(profile: &str) -> Option<String> {
             None
         }
     })
+}
+
+/// True when this profile still contains an unfilled
+/// `WriteProviderTemplate` placeholder — see `util::INCOMPLETE_MARKER`.
+pub fn is_incomplete(profile: &str) -> bool {
+    crate::util::file_is_incomplete(&format!("{PROFILE_DIR}/{profile}.conf"))
 }
 
 pub async fn up(conn: &zbus::Connection, profile: &str) -> NyxResult<()> {

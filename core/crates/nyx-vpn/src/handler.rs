@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::{amneziawg, dante, hysteria, openvpn, route, shadowsocks, wireguard, xray};
+use crate::{amneziawg, dante, free_provider, hysteria, import, openvpn, route, shadowsocks, templates, wireguard, xray};
 use nyx_core::{NyxOutput, SecurityState, VpnCommand, VpnProfile, VpnProtocol, VpnReport};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
@@ -243,34 +243,38 @@ async fn probe(conn: &Connection, state: &AppState) -> VpnReport {
 fn list_profiles() -> Vec<VpnProfile> {
     let mut profiles: Vec<VpnProfile> = wireguard::list_profiles()
         .into_iter()
-        .map(|name| VpnProfile { protocol: VpnProtocol::WireGuard, name })
+        .map(|name| VpnProfile { incomplete: wireguard::is_incomplete(&name), protocol: VpnProtocol::WireGuard, name })
         .collect();
-    profiles.extend(
-        openvpn::list_profiles()
-            .into_iter()
-            .map(|name| VpnProfile { protocol: VpnProtocol::OpenVpn, name }),
-    );
-    profiles.extend(
-        amneziawg::list_profiles()
-            .into_iter()
-            .map(|name| VpnProfile { protocol: VpnProtocol::AmneziaWg, name }),
-    );
-    profiles.extend(
-        xray::list_profiles().into_iter().map(|name| VpnProfile { protocol: VpnProtocol::Xray, name }),
-    );
-    profiles.extend(
-        shadowsocks::list_profiles()
-            .into_iter()
-            .map(|name| VpnProfile { protocol: VpnProtocol::Shadowsocks, name }),
-    );
-    profiles.extend(
-        hysteria::list_profiles()
-            .into_iter()
-            .map(|name| VpnProfile { protocol: VpnProtocol::Hysteria2, name }),
-    );
-    profiles.extend(
-        dante::list_profiles().into_iter().map(|name| VpnProfile { protocol: VpnProtocol::Socks5, name }),
-    );
+    profiles.extend(openvpn::list_profiles().into_iter().map(|name| VpnProfile {
+        incomplete: openvpn::is_incomplete(&name),
+        protocol: VpnProtocol::OpenVpn,
+        name,
+    }));
+    profiles.extend(amneziawg::list_profiles().into_iter().map(|name| VpnProfile {
+        incomplete: amneziawg::is_incomplete(&name),
+        protocol: VpnProtocol::AmneziaWg,
+        name,
+    }));
+    profiles.extend(xray::list_profiles().into_iter().map(|name| VpnProfile {
+        incomplete: xray::is_incomplete(&name),
+        protocol: VpnProtocol::Xray,
+        name,
+    }));
+    profiles.extend(shadowsocks::list_profiles().into_iter().map(|name| VpnProfile {
+        incomplete: shadowsocks::is_incomplete(&name),
+        protocol: VpnProtocol::Shadowsocks,
+        name,
+    }));
+    profiles.extend(hysteria::list_profiles().into_iter().map(|name| VpnProfile {
+        incomplete: hysteria::is_incomplete(&name),
+        protocol: VpnProtocol::Hysteria2,
+        name,
+    }));
+    profiles.extend(dante::list_profiles().into_iter().map(|name| VpnProfile {
+        incomplete: dante::is_incomplete(&name),
+        protocol: VpnProtocol::Socks5,
+        name,
+    }));
     profiles
 }
 
@@ -483,6 +487,39 @@ pub async fn dispatch(conn: &Connection, state: &AppState, cmd: VpnCommand) -> N
                     NyxOutput::ok(BINARY, "disconnect", detail, Some(report))
                 }
                 Err(e) => NyxOutput::<VpnReport>::err(BINARY, "disconnect", e),
+            }
+        }
+
+        VpnCommand::ImportProfile { protocol, name, contents } => {
+            match import::import_profile(protocol, &name, &contents) {
+                Ok(detail) => {
+                    let mut report = probe(conn, state).await;
+                    report.profiles = list_profiles();
+                    NyxOutput::ok(BINARY, "import_profile", detail, Some(report))
+                }
+                Err(e) => NyxOutput::<VpnReport>::err(BINARY, "import_profile", e.to_string()),
+            }
+        }
+
+        VpnCommand::FetchFreeProvider { provider, country } => {
+            match free_provider::fetch(provider, country.as_deref()) {
+                Ok(detail) => {
+                    let mut report = probe(conn, state).await;
+                    report.profiles = list_profiles();
+                    NyxOutput::ok(BINARY, "fetch_free_provider", detail, Some(report))
+                }
+                Err(e) => NyxOutput::<VpnReport>::err(BINARY, "fetch_free_provider", e.to_string()),
+            }
+        }
+
+        VpnCommand::WriteProviderTemplate { provider, name } => {
+            match templates::write_template(provider, &name) {
+                Ok(detail) => {
+                    let mut report = probe(conn, state).await;
+                    report.profiles = list_profiles();
+                    NyxOutput::warn(BINARY, "write_provider_template", detail, Some(report))
+                }
+                Err(e) => NyxOutput::<VpnReport>::err(BINARY, "write_provider_template", e.to_string()),
             }
         }
     }

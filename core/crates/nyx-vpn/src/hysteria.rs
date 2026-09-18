@@ -39,7 +39,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 use zbus::Connection;
 
-const PROFILE_DIR: &str = "/etc/nyx/hysteria";
+pub(crate) const PROFILE_DIR: &str = "/etc/nyx/hysteria";
 
 fn unit_name(profile: &str) -> String {
     format!("nyx-vpn-hysteria@{profile}.service")
@@ -61,6 +61,14 @@ pub fn list_profiles() -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// True when this profile still contains an unfilled
+/// `WriteProviderTemplate` placeholder — see `util::INCOMPLETE_MARKER`.
+/// `false` if the profile isn't found under either extension `config_path`
+/// recognizes, matching that function's own "don't guess" convention.
+pub fn is_incomplete(profile: &str) -> bool {
+    config_path(profile).map(|p| crate::util::file_is_incomplete(&p)).unwrap_or(false)
 }
 
 pub async fn up(conn: &Connection, profile: &str) -> NyxResult<()> {

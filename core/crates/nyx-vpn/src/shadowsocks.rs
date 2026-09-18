@@ -30,7 +30,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 use zbus::Connection;
 
-const PROFILE_DIR: &str = "/etc/shadowsocks-rust";
+pub(crate) const PROFILE_DIR: &str = "/etc/shadowsocks-rust";
 
 fn unit_name(profile: &str) -> String {
     format!("shadowsocks-rust@{profile}.service")
@@ -58,6 +58,12 @@ pub fn list_profiles() -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// True when this profile still contains an unfilled
+/// `WriteProviderTemplate` placeholder — see `util::INCOMPLETE_MARKER`.
+pub fn is_incomplete(profile: &str) -> bool {
+    crate::util::file_is_incomplete(&format!("{PROFILE_DIR}/{profile}.json"))
 }
 
 pub async fn up(conn: &Connection, profile: &str) -> NyxResult<()> {

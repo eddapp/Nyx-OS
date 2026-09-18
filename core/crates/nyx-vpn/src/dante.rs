@@ -57,7 +57,7 @@ use std::process::Command;
 use std::time::Duration;
 use zbus::Connection;
 
-const PROFILE_DIR: &str = "/etc/nyx/socks5";
+pub(crate) const PROFILE_DIR: &str = "/etc/nyx/socks5";
 /// The virtual router `badvpn-tun2socks` presents *inside* the TUN device
 /// (per its own docs, this must differ from the TUN device's own address)
 /// — also the gateway nyx-vpn points the replacement default route at.
@@ -77,6 +77,14 @@ fn unit_name(profile: &str) -> String {
 
 fn config_path(profile: &str) -> String {
     format!("{PROFILE_DIR}/{profile}.conf")
+}
+
+/// True when this profile still contains an unfilled
+/// `WriteProviderTemplate` placeholder — see `util::INCOMPLETE_MARKER`.
+/// No `TemplateProvider` currently targets this protocol, but the check is
+/// as cheap and uniform here as for every other backend.
+pub fn is_incomplete(profile: &str) -> bool {
+    crate::util::file_is_incomplete(&config_path(profile))
 }
 
 pub fn list_profiles() -> Vec<String> {
