@@ -38,6 +38,9 @@ set -euo pipefail
 # always, identical to the built package's pkgname).
 AUR_PACKAGES=(
     zen-browser-bin
+    amneziawg-tools
+    amneziawg-dkms
+    hysteria-bin
 )
 
 # build_aur_packages <local_repo_dir>
