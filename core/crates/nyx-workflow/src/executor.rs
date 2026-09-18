@@ -1,8 +1,9 @@
 use crate::client;
 use crate::model::{Condition, Workflow, WorkflowCommand};
 use nyx_core::{
-    DnsCommand, DnsReport, HealthCommand, HealthState, IntegrityCommand, IntegrityReport,
-    NyxOutput, Status, Toggle, VpnCommand, VpnReport, DNS_SOCKET, HEALTH_SOCKET,
+    DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
+    IdentityCommand, IdentityReport, IntegrityCommand, IntegrityReport, NyxOutput, Status,
+    Toggle, VpnCommand, VpnReport, DEVICES_SOCKET, DNS_SOCKET, HEALTH_SOCKET, IDENTITY_SOCKET,
     INTEGRITY_SOCKET, VPN_SOCKET,
 };
 use std::io::Write;
@@ -33,6 +34,53 @@ fn call_health(cmd: HealthCommand) -> (bool, String) {
     match client::call::<HealthCommand, NyxOutput<HealthState>>(HEALTH_SOCKET, &cmd) {
         Ok(out) => (matches!(out.status, Status::Ok | Status::Warning), out.message),
         Err(e) => (false, e),
+    }
+}
+
+fn call_identity(cmd: IdentityCommand) -> (bool, String) {
+    match client::call::<IdentityCommand, NyxOutput<IdentityReport>>(IDENTITY_SOCKET, &cmd) {
+        Ok(out) => (matches!(out.status, Status::Ok | Status::Warning), out.message),
+        Err(e) => (false, e),
+    }
+}
+
+fn call_devices(cmd: DevicesCommand) -> (bool, String) {
+    match client::call::<DevicesCommand, NyxOutput<DevicesReport>>(DEVICES_SOCKET, &cmd) {
+        Ok(out) => (matches!(out.status, Status::Ok | Status::Warning), out.message),
+        Err(e) => (false, e),
+    }
+}
+
+/// Stages `policy_json` to a temp file the invoking user can write, then
+/// asks `pkexec` to install it as `/etc/librewolf/policies/policies.json`
+/// (mode 0644, creating the directory if needed) — LibreWolf reads that
+/// exact path and it wins over `/etc/firefox/policies/policies.json` and
+/// the bundled `distribution/policies.json`, with no merging between them,
+/// so writing this one file fully determines the browser's policy state.
+fn apply_browser_policy(label: &str, policy_json: &str) -> (bool, String) {
+    let tmp = std::env::temp_dir().join(format!("nyx-librewolf-policy-{}.json", std::process::id()));
+    if let Err(e) = std::fs::write(&tmp, policy_json) {
+        return (false, format!("could not stage {label} LibreWolf policy file: {e}"));
+    }
+
+    let result = std::process::Command::new("pkexec")
+        .args(["install", "-Dm644", &tmp.to_string_lossy(), "/etc/librewolf/policies/policies.json"])
+        .status();
+    let _ = std::fs::remove_file(&tmp);
+
+    match result {
+        Ok(status) if status.success() => (
+            true,
+            format!("installed {label} LibreWolf policy to /etc/librewolf/policies/policies.json"),
+        ),
+        Ok(status) => (
+            false,
+            format!(
+                "pkexec install exited with {status} — {label} LibreWolf policy was NOT applied \
+                 (auth prompt declined, or polkit/pkexec unavailable)"
+            ),
+        ),
+        Err(e) => (false, format!("could not run pkexec: {e}")),
     }
 }
 
@@ -97,6 +145,35 @@ fn execute(cmd: &WorkflowCommand) -> (bool, String) {
                 Ok(out) => (matches!(out.status, Status::Ok), out.message),
                 Err(e) => (false, e),
             }
+        }
+        WorkflowCommand::IdentityStatus => call_identity(IdentityCommand::Status),
+        WorkflowCommand::IdentitySetIpv6 { enabled } => {
+            call_identity(IdentityCommand::SetIpv6 { enabled: *enabled })
+        }
+        WorkflowCommand::IdentityRandomizeMac { interface } => {
+            call_identity(IdentityCommand::RandomizeMac { interface: interface.clone() })
+        }
+        WorkflowCommand::IdentityRandomizeHostname => {
+            call_identity(IdentityCommand::RandomizeHostname)
+        }
+        WorkflowCommand::IdentityRandomizeTimezone => {
+            call_identity(IdentityCommand::RandomizeTimezone)
+        }
+        WorkflowCommand::DevicesStatus => call_devices(DevicesCommand::Status),
+        WorkflowCommand::DevicesSetUsbGuard { enabled } => {
+            call_devices(DevicesCommand::SetUsbGuard { enabled: *enabled })
+        }
+        WorkflowCommand::DevicesSetModule { module, enabled } => {
+            call_devices(DevicesCommand::SetModule { module: *module, enabled: *enabled })
+        }
+        WorkflowCommand::DevicesSetMicrophone { enabled } => {
+            call_devices(DevicesCommand::SetMicrophone { enabled: *enabled })
+        }
+        WorkflowCommand::DevicesSetRadio { radio, on } => {
+            call_devices(DevicesCommand::SetRadio { radio: *radio, on: *on })
+        }
+        WorkflowCommand::ApplyBrowserPolicy { label, policy_json } => {
+            apply_browser_policy(label, policy_json)
         }
     }
 }

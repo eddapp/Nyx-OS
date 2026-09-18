@@ -6,7 +6,7 @@
 //! don't already expose, which is the whole point of routing everything
 //! through the control plane instead of ad-hoc scripts.
 
-use nyx_core::{KillSwitchLevel, VpnProtocol};
+use nyx_core::{DeviceModule, DeviceRadio, KillSwitchLevel, VpnProtocol};
 
 #[derive(Clone)]
 pub enum WorkflowCommand {
@@ -20,6 +20,22 @@ pub enum WorkflowCommand {
     VpnStatus,
     VpnConnect { protocol: VpnProtocol, profile: String },
     VpnDisconnect,
+    IdentityStatus,
+    IdentitySetIpv6 { enabled: bool },
+    IdentityRandomizeMac { interface: String },
+    IdentityRandomizeHostname,
+    IdentityRandomizeTimezone,
+    DevicesStatus,
+    DevicesSetUsbGuard { enabled: bool },
+    DevicesSetModule { module: DeviceModule, enabled: bool },
+    DevicesSetMicrophone { enabled: bool },
+    DevicesSetRadio { radio: DeviceRadio, on: bool },
+    /// Purely local — writes `policy_json` to
+    /// `/etc/librewolf/policies/policies.json` via `pkexec install`
+    /// (LibreWolf reads that exact path and it takes priority over
+    /// `/etc/firefox/policies/policies.json`). `label` is only for the
+    /// human-readable step result, e.g. "Paranoid".
+    ApplyBrowserPolicy { label: &'static str, policy_json: &'static str },
     /// Purely local — print informational text, always succeeds.
     Message(String),
     /// Purely local — block for an interactive yes/no; failing this step

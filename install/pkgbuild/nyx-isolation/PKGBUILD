@@ -7,10 +7,10 @@
 pkgname=nyx-isolation
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="NyxOS application sandbox launcher (Firejail-backed, validated allowlist)"
+pkgdesc="NyxOS application sandbox launcher (Firejail-backed, validated allowlist, plus a pinned-image Podman container runtime)"
 arch=('x86_64')
 license=('MIT')
-depends=('firejail')
+depends=('firejail' 'podman')
 makedepends=('cargo')
 
 _repo_root="$startdir/../../.."

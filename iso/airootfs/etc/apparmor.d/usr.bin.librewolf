@@ -1,0 +1,227 @@
+# NyxOS AppArmor profile for LibreWolf — confines the browser's parent and
+# content processes to what a Firefox-family browser actually needs.
+#
+# This is an independent design written against AppArmor's own documented
+# rule syntax (apparmor.d(5), the abi/4.0 feature set shipped by the
+# `apparmor` 4.1.7 package NyxOS installs) and Firefox/LibreWolf's publicly
+# documented multi-process/namespace sandbox model. It is not copied from
+# any other distro's or project's shipped profile.
+#
+# Scope note: this profile does NOT contain a `network` rule block. AppArmor
+# only starts mediating a given resource class once a profile contains at
+# least one rule for it, so omitting `network` entirely means AppArmor
+# imposes no network restriction here — and that is deliberate, not an
+# oversight. NyxOS's actual network confinement (VPN/Tor kill switch, DNS
+# enforcement, firewall policy) is already handled at the nftables/socket
+# layer by nyx-health, nyx-vpn and nyx-dns; duplicating a coarse allow-all
+# `network,` rule here would add nothing, and a restrictive one would fight
+# those daemons' own runtime policy changes. AppArmor's job in this file is
+# file/IPC/namespace confinement, not packet filtering.
+
+abi <abi/4.0>,
+
+#include <tunables/global>
+
+# Real install path reasoning: Arch's `librewolf` package (now shipped from
+# the official [extra] repo) follows the same layout Arch's `firefox`
+# package uses — a wrapper at /usr/bin/librewolf and the actual ELF binary
+# under /usr/lib/librewolf/librewolf. The brace-expansion attachment path
+# below covers whichever of the two paths the kernel actually execs, since
+# AppArmor attaches by the path passed to exec(), and that differs between
+# "run the wrapper" and "the wrapper execs the real binary directly".
+profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected) {
+  #include <abstractions/base>
+  #include <abstractions/fonts>
+  #include <abstractions/nameservice>
+
+  # --- Namespaces -----------------------------------------------------
+  #
+  # Firefox-family browsers build their own internal content-process
+  # sandbox on top of unprivileged user namespaces (unshare(CLONE_NEWUSER)
+  # plus mount/pid namespaces for the content process jail). On AppArmor
+  # 4.x, creating a user namespace from inside a confined profile is
+  # mediated by its own `userns` rule; without it here, LibreWolf doesn't
+  # get denied outright — it silently falls back to running its content
+  # processes without its own internal sandbox layer, which is worse than
+  # either failing loudly or being properly confined. Grant it explicitly.
+  userns,
+
+  # Same multi-process architecture needs to signal and, for its own
+  # built-in crash/sandbox monitor, ptrace its own content processes; both
+  # are scoped to peers running under this same profile, never a bare
+  # "ptrace anything" grant.
+  signal (send, receive) peer=librewolf,
+  ptrace (read, trace) peer=librewolf,
+
+  # Anonymous AF_UNIX socketpairs are how the parent process talks to its
+  # own content/GPU/socket processes. Scoped to same-profile peers only.
+  unix (send, receive, connect, accept) type=stream peer=(label=librewolf),
+
+  # --- The browser binary itself ---------------------------------------
+  /usr/{bin,lib/librewolf}/librewolf mr,
+  /usr/lib/librewolf/** mr,
+
+  # --- Profile / cache / config: full read-write, this is the browser's
+  # own data --------------------------------------------------------------
+  owner @{HOME}/.librewolf/ rw,
+  owner @{HOME}/.librewolf/** rwk,
+  owner @{HOME}/.cache/librewolf/ rw,
+  owner @{HOME}/.cache/librewolf/** rwk,
+  owner @{HOME}/.config/librewolf/ rw,
+  owner @{HOME}/.config/librewolf/** rwk,
+
+  # --- Deliberately scoped general file access -------------------------
+  #
+  # Only Downloads and Desktop get real file access, not a blanket
+  # "@{HOME}/** rw" or the stock abstractions/user-download abstraction.
+  # A compromised content process is still confined by this profile even
+  # after any internal sandbox bypass, and the whole point of that second
+  # layer is defeated if it can read or write anything anywhere in the
+  # user's home directory — a broad home-wide grant would hand a exploited
+  # renderer every private document, SSH key, or password vault in
+  # @{HOME} for free. Downloads/Desktop are where a browser legitimately
+  # needs to save files a user asked it to save, and nowhere else.
+  owner @{HOME}/Downloads/ rw,
+  owner @{HOME}/Downloads/** rwk,
+  owner @{HOME}/Desktop/ rw,
+  owner @{HOME}/Desktop/** rwk,
+
+  # Scratch space Firefox-family browsers genuinely use for temp downloads,
+  # PDF.js/print rendering, and screenshot staging — owner-scoped so this
+  # can't touch another user's temp files.
+  owner /tmp/** rwk,
+  owner /tmp/ rw,
+
+  # --- Read-only system paths -------------------------------------------
+  /etc/librewolf/ r,
+  /etc/librewolf/** r,
+
+  /usr/share/fonts/** r,
+  /etc/fonts/** r,
+  /usr/share/fontconfig/** r,
+  owner @{HOME}/.fonts/** r,
+  owner @{HOME}/.local/share/fonts/** r,
+
+  /usr/share/hunspell/** r,
+  /usr/share/myspell/** r,
+
+  /usr/share/mime/** r,
+  /etc/mime.types r,
+
+  # --- D-Bus session bus / xdg-desktop-portal ---------------------------
+  #
+  # Scoped to the portal and notification interfaces LibreWolf actually
+  # calls (file picker, screen-share picker, notifications), not a blanket
+  # session-bus abstraction.
+  dbus send bus=session peer=(name=org.freedesktop.DBus),
+  dbus receive bus=session peer=(name=org.freedesktop.DBus),
+  dbus (send, receive) bus=session peer=(name=org.freedesktop.portal.Desktop, label=unconfined),
+  dbus (send, receive) bus=session peer=(name=org.freedesktop.Notifications, label=unconfined),
+  dbus (send, receive) bus=session peer=(name=org.a11y.Bus, label=unconfined),
+
+  # --- PipeWire (screen-share / webcam / audio) and PulseAudio-compat ---
+  owner /run/user/[0-9]*/pipewire-0 rw,
+  owner /run/user/[0-9]*/pulse/native rw,
+
+  # --- GPU: /dev/dri + the sysfs paths hardware-accelerated rendering
+  # (WebGL, VA-API video decode) actually reads and pokes ------------------
+  /dev/dri/card[0-9]* rw,
+  /dev/dri/renderD[0-9]* rw,
+  /sys/class/drm/ r,
+  /sys/class/drm/** r,
+  /sys/devices/pci[0-9]*/**/drm/** rw,
+
+  # --- /proc: scoped to the browser's own processes, not /proc/** --------
+  @{PROC}/@{pid}/net/route r,
+  @{PROC}/@{pid}/net/if_inet6 r,
+  @{PROC}/@{pid}/net/ipv6_route r,
+  @{PROC}/@{pid}/stat r,
+  @{PROC}/@{pid}/statm r,
+  @{PROC}/@{pid}/status r,
+  @{PROC}/@{pid}/oom_score_adj rw,
+  @{PROC}/@{pid}/task/ r,
+  @{PROC}/@{pid}/task/** r,
+  @{PROC}/sys/kernel/yama/ptrace_scope r,
+  @{PROC}/sys/vm/overcommit_memory r,
+  @{PROC}/cpuinfo r,
+  @{PROC}/meminfo r,
+
+  # --- Explicit denials --------------------------------------------------
+  #
+  # Named out loud even though most of these would already fail to match
+  # any allow rule above (default-deny) — an explicit `deny` also silences
+  # the matching allow-rule audit noise and, more importantly, survives
+  # this profile picking up a broader abstraction later without silently
+  # re-opening access to it.
+  deny /root/** rwklx,
+  deny /etc/shadow r,
+  deny /etc/gshadow r,
+  deny /etc/ssh/** rwklx,
+  deny /etc/sudoers r,
+  deny /etc/sudoers.d/** rwklx,
+  deny /var/log/** rwklx,
+
+  # NyxOS control-plane paths: a browser process — confined or not — has
+  # no legitimate reason to ever touch a Nyx daemon's config or socket.
+  deny /etc/nyx/** rwklx,
+  deny /run/nyx/** rwklx,
+  deny /run/nyx-telemetry/** rwklx,
+
+  # --- MIME-handler helper: its own narrowly-scoped child profile --------
+  #
+  # `Cx` (clean exec, child-profile transition) rather than `ix` (stay in
+  # this profile) or `ux` (fully unconfined): a MIME-handler exploit
+  # triggered by opening a downloaded file should not inherit this
+  # profile's Downloads/Desktop *write* access or its librewolf profile/
+  # cache/config access. The child profile below gets read-only access to
+  # what it needs to resolve and hand off to a handler, nothing more.
+  /usr/bin/xdg-open Cx -> xdg-open,
+  /usr/bin/xdg-mime Cx -> xdg-open,
+
+  profile xdg-open flags=(attach_disconnected) {
+    #include <abstractions/base>
+
+    /usr/bin/xdg-open r,
+    /usr/bin/xdg-mime r,
+    /usr/bin/xdg-settings r,
+
+    # Resolving a MIME type to a handler means reading desktop files and
+    # the user's own handler-association list.
+    /usr/share/applications/ r,
+    /usr/share/applications/** r,
+    owner @{HOME}/.local/share/applications/ r,
+    owner @{HOME}/.local/share/applications/** r,
+    owner @{HOME}/.config/mimeapps.list r,
+
+    # Read-only on Downloads/Desktop: this helper needs to read the file
+    # it's handing off to a handler, but never gets the write access the
+    # parent librewolf profile has there.
+    owner @{HOME}/Downloads/** r,
+    owner @{HOME}/Desktop/** r,
+    owner /tmp/** r,
+
+    dbus send bus=session peer=(name=org.freedesktop.DBus),
+    dbus receive bus=session peer=(name=org.freedesktop.DBus),
+    dbus (send, receive) bus=session peer=(name=org.freedesktop.portal.OpenURI, label=unconfined),
+
+    # The resolved handler runs confined under this same restricted
+    # profile (inherit) rather than a fresh unconfined exec — a real
+    # per-application handler profile (transitioned via `px` to that
+    # app's own top-level profile) is the natural next step once NyxOS
+    # ships AppArmor profiles for individual desktop apps, but "confined
+    # under this narrow profile" is still strictly safer than "unconfined"
+    # as a default.
+    /usr/bin/* ix,
+    /usr/local/bin/* ix,
+
+    deny /root/** rwklx,
+    deny @{HOME}/.librewolf/** rwklx,
+    deny @{HOME}/.cache/librewolf/** rwklx,
+    deny @{HOME}/.config/librewolf/** rwklx,
+    deny @{HOME}/Downloads/** w,
+    deny @{HOME}/Desktop/** w,
+    deny /etc/nyx/** rwklx,
+    deny /run/nyx/** rwklx,
+    deny /run/nyx-telemetry/** rwklx,
+  }
+}

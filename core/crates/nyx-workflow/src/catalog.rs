@@ -5,7 +5,8 @@
 use crate::model::{Condition, DangerLevel, Step, Workflow, WorkflowCommand};
 use nyx_core::VpnProtocol;
 
-const STATUS_ROLLBACK: &str = "Re-run the equivalent status command and compare against the prior state.";
+pub(crate) const STATUS_ROLLBACK: &str =
+    "Re-run the equivalent status command and compare against the prior state.";
 const IRREVERSIBLE_ROLLBACK: &str =
     "No automated rollback exists for this step — restore network/service state manually if needed.";
 

@@ -89,4 +89,130 @@
     <text-files/>
     <video-files/>
   </action>
+
+  <action>
+    <icon>dialog-password</icon>
+    <name>NyxOS GPG Encrypt</name>
+    <unique-id>org.nyxos.thunar.gpg-encrypt-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-gpg-encrypt.sh %F</command>
+    <description>Symmetrically encrypt the selected file(s) with gpg (AES256) — passphrase never touches disk</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>dialog-password</icon>
+    <name>NyxOS GPG Decrypt</name>
+    <unique-id>org.nyxos.thunar.gpg-decrypt-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-gpg-decrypt.sh %F</command>
+    <description>Decrypt the selected .gpg/.asc file(s) — passphrase never touches disk</description>
+    <patterns>*.gpg;*.asc</patterns>
+    <startup-notify/>
+    <other-files/>
+    <text-files/>
+  </action>
+
+  <action>
+    <icon>document-sign</icon>
+    <name>NyxOS GPG Sign</name>
+    <unique-id>org.nyxos.thunar.gpg-sign-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-gpg-sign.sh %F</command>
+    <description>Create a detached GPG signature (.sig) for the selected file(s)</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>document-sign</icon>
+    <name>NyxOS GPG Verify</name>
+    <unique-id>org.nyxos.thunar.gpg-verify-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-gpg-verify.sh %f</command>
+    <description>Verify a detached GPG signature (.sig/.asc) against its signed file</description>
+    <patterns>*.sig;*.asc</patterns>
+    <other-files/>
+    <text-files/>
+  </action>
+
+  <action>
+    <icon>dialog-password</icon>
+    <name>NyxOS OpenSSL Encrypt</name>
+    <unique-id>org.nyxos.thunar.openssl-encrypt-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-openssl.sh encrypt %F</command>
+    <description>Encrypt the selected file(s) with openssl (AES-256-CBC, PBKDF2) — passphrase never touches disk</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>dialog-password</icon>
+    <name>NyxOS OpenSSL Decrypt</name>
+    <unique-id>org.nyxos.thunar.openssl-decrypt-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-openssl.sh decrypt %F</command>
+    <description>Decrypt the selected openssl-encrypted file(s) — passphrase never touches disk</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>text-x-generic</icon>
+    <name>NyxOS Hex View</name>
+    <unique-id>org.nyxos.thunar.hexview-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-hexview.sh %f</command>
+    <description>View the selected file as a hex dump (xxd) in a paged terminal</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>utilities-system-monitor</icon>
+    <name>NyxOS Entropy Analysis</name>
+    <unique-id>org.nyxos.thunar.entropy-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-entropy.sh %f</command>
+    <description>Run Shannon entropy analysis (ent) — high entropy suggests genuinely compressed/encrypted data</description>
+    <patterns>*</patterns>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
+
+  <action>
+    <icon>text-x-generic</icon>
+    <name>NyxOS Compare Files</name>
+    <unique-id>org.nyxos.thunar.compare-1</unique-id>
+    <command>/usr/lib/nyx/thunar/nyx-thunar-compare.sh %F</command>
+    <description>Show a unified diff between exactly two selected files</description>
+    <patterns>*</patterns>
+    <audio-files/>
+    <image-files/>
+    <other-files/>
+    <text-files/>
+    <video-files/>
+  </action>
 </actions>

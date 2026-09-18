@@ -7,6 +7,7 @@ mod catalog;
 mod client;
 mod executor;
 mod model;
+mod posture;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use nyx_core::VpnProtocol;
@@ -85,6 +86,9 @@ fn main() {
                 catalog::PARAMETRIZED_WORKFLOW_ID,
                 catalog::PARAMETRIZED_WORKFLOW_DESCRIPTION
             );
+            for p in posture::Posture::all() {
+                println!("{}\t{}", p.id(), p.description());
+            }
         }
         Cmd::Run { id, protocol, profile } => {
             if id == catalog::PARAMETRIZED_WORKFLOW_ID {
@@ -97,6 +101,11 @@ fn main() {
                     std::process::exit(1);
                 };
                 run_and_report(catalog::connect_vpn_with_verification(protocol.into(), profile));
+                return;
+            }
+
+            if let Some(p) = posture::Posture::parse(&id) {
+                run_and_report(posture::build(p));
                 return;
             }
 

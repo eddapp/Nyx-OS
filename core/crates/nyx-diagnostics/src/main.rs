@@ -5,8 +5,10 @@
 //! boundary the dashboard uses) or from ordinary unprivileged reads
 //! (`ip addr`/`ip route`) and standard tools (`ping`, `traceroute`).
 
+mod bundle;
 mod checks;
 mod client;
+mod redact;
 
 use clap::{Parser, Subcommand};
 use nyx_core::{
@@ -15,6 +17,8 @@ use nyx_core::{
     TelemetryCommand, TelemetryReport, VpnCommand, VpnReport, DEVICES_SOCKET, DNS_SOCKET,
     HEALTH_SOCKET, IDENTITY_SOCKET, INTEGRITY_SOCKET, TELEMETRY_SOCKET, VPN_SOCKET,
 };
+use serde::de::DeserializeOwned;
+use serde::Serialize;
 
 const BINARY: &str = "nyx-diagnostics";
 
@@ -56,21 +60,94 @@ enum Cmd {
     /// quick connectivity check. Does NOT fetch the public IP — that's
     /// opt-in only via `public-ip`.
     Summary,
+    /// Collect a sanitized diagnostics bundle for support/troubleshooting:
+    /// the same live daemon statuses `summary` gathers, an
+    /// interfaces/routes dump, `uname -a`, and recent systemd/journal
+    /// output for the Nyx services, packed into a gzipped tarball. Every
+    /// collected item is redacted of secrets/IPs/emails/usernames before
+    /// it's written — never includes credentials, browsing history, or
+    /// personal file contents.
+    Bundle {
+        /// Where to write the archive. Defaults to
+        /// `~/nyx-diagnostics-bundle-<unix-timestamp>.tar.gz`.
+        #[arg(long)]
+        output: Option<String>,
+    },
 }
 
 fn print_local<T: serde::Serialize>(command: &str, message: impl Into<String>, data: T) {
     NyxOutput::ok(BINARY, command, message, Some(data)).print();
 }
 
-fn print_daemon_status<C: serde::Serialize, R: serde::Serialize + serde::de::DeserializeOwned>(
+/// Calls one daemon's `Status` (or other) command and returns its
+/// response as a pretty-printed JSON string — either the daemon's own
+/// `NyxOutput`, or a synthesized error `NyxOutput` if it couldn't be
+/// reached. A daemon that isn't running is itself diagnostic information,
+/// not a fatal error for the rest of the report.
+fn daemon_status_json<C: Serialize, R: Serialize + DeserializeOwned>(
     label: &str,
     socket: &str,
     cmd: C,
-) {
-    match client::call::<C, NyxOutput<R>>(socket, &cmd) {
-        Ok(out) => out.print(),
-        Err(e) => NyxOutput::<()>::err(BINARY, label, format!("{label} unreachable: {e}")).print(),
-    }
+) -> String {
+    let out = match client::call::<C, NyxOutput<R>>(socket, &cmd) {
+        Ok(out) => serde_json::to_string(&out),
+        Err(e) => serde_json::to_string(&NyxOutput::<()>::err(
+            BINARY,
+            label,
+            format!("{label} unreachable: {e}"),
+        )),
+    };
+    out.unwrap_or_else(|_| r#"{"status":"error","message":"output serialization failed"}"#.to_string())
+}
+
+fn print_daemon_status<C: Serialize, R: Serialize + DeserializeOwned>(label: &str, socket: &str, cmd: C) {
+    println!("{}", daemon_status_json::<C, R>(label, socket, cmd));
+}
+
+/// Every Nyx daemon's live status as `(label, json)` pairs — the exact
+/// same calls `run_summary` prints, factored out here so `bundle` can
+/// reuse them instead of duplicating the daemon-calling logic.
+pub(crate) fn gather_daemon_statuses() -> Vec<(&'static str, String)> {
+    vec![
+        (
+            "health",
+            daemon_status_json::<HealthCommand, HealthState>("health", HEALTH_SOCKET, HealthCommand::Status),
+        ),
+        ("vpn", daemon_status_json::<VpnCommand, VpnReport>("vpn", VPN_SOCKET, VpnCommand::Status)),
+        ("dns", daemon_status_json::<DnsCommand, DnsReport>("dns", DNS_SOCKET, DnsCommand::Status)),
+        (
+            "identity",
+            daemon_status_json::<IdentityCommand, IdentityReport>(
+                "identity",
+                IDENTITY_SOCKET,
+                IdentityCommand::Status,
+            ),
+        ),
+        (
+            "devices",
+            daemon_status_json::<DevicesCommand, DevicesReport>(
+                "devices",
+                DEVICES_SOCKET,
+                DevicesCommand::Status,
+            ),
+        ),
+        (
+            "integrity",
+            daemon_status_json::<IntegrityCommand, IntegrityReport>(
+                "integrity",
+                INTEGRITY_SOCKET,
+                IntegrityCommand::Status,
+            ),
+        ),
+        (
+            "telemetry",
+            daemon_status_json::<TelemetryCommand, TelemetryReport>(
+                "telemetry",
+                TELEMETRY_SOCKET,
+                TelemetryCommand::Status,
+            ),
+        ),
+    ]
 }
 
 fn run_summary() {
@@ -165,5 +242,42 @@ fn main() {
             }
         }
         Cmd::Summary => run_summary(),
+        Cmd::Bundle { output } => match bundle::collect(output) {
+            Ok(outcome) => {
+                let message = format!(
+                    "bundle written to {} — redacted {} IP address(es), {} email(s), {} secret-like \
+                     value(s), {} username occurrence(s) ({} total)",
+                    outcome.archive_path.display(),
+                    outcome.counts.ip_addresses,
+                    outcome.counts.emails,
+                    outcome.counts.secrets,
+                    outcome.counts.usernames,
+                    outcome.counts.total(),
+                );
+                let data = BundleReportData {
+                    archive_path: outcome.archive_path.display().to_string(),
+                    files_included: outcome.files,
+                    redacted_ip_addresses: outcome.counts.ip_addresses,
+                    redacted_emails: outcome.counts.emails,
+                    redacted_secrets: outcome.counts.secrets,
+                    redacted_username_occurrences: outcome.counts.usernames,
+                };
+                print_local("bundle", message, data);
+            }
+            Err(e) => {
+                NyxOutput::<()>::err(BINARY, "bundle", e).print();
+                std::process::exit(1);
+            }
+        },
     }
+}
+
+#[derive(serde::Serialize)]
+struct BundleReportData {
+    archive_path: String,
+    files_included: Vec<String>,
+    redacted_ip_addresses: usize,
+    redacted_emails: usize,
+    redacted_secrets: usize,
+    redacted_username_occurrences: usize,
 }
