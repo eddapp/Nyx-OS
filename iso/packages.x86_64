@@ -41,6 +41,9 @@ nftables
 openssh
 wireguard-tools
 openvpn
+xray
+shadowsocks-rust
+badvpn
 macchanger
 iproute2
 iputils
@@ -63,6 +66,8 @@ nyx-integrity
 nyx-wipe
 nyx-isolation
 nyx-workflow
+nyx-hardening
+nyx-watch
 nyx-thunar-integration
 nyx-desktop-sessions
 nyx-dashboard
@@ -169,3 +174,4 @@ openssl
 xclip
 ethtool
 usbutils
+secure-delete
