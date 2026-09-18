@@ -31,7 +31,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 use zbus::Connection;
 
-const PROFILE_DIR: &str = "/etc/nyx/xray";
+pub(crate) const PROFILE_DIR: &str = "/etc/nyx/xray";
 
 /// Tag of the synthetic Tor outbound `up_via_socks_proxy` splices into a
 /// profile's runtime-only copy — arbitrary, but kept out of the tag
@@ -61,6 +61,12 @@ pub fn list_profiles() -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// True when this profile still contains an unfilled
+/// `WriteProviderTemplate` placeholder — see `util::INCOMPLETE_MARKER`.
+pub fn is_incomplete(profile: &str) -> bool {
+    crate::util::file_is_incomplete(&format!("{PROFILE_DIR}/{profile}.json"))
 }
 
 pub async fn up(conn: &Connection, profile: &str) -> NyxResult<()> {

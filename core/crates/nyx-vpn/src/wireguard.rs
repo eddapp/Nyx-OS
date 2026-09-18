@@ -15,7 +15,7 @@ use std::fs;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const PROFILE_DIR: &str = "/etc/wireguard";
+pub(crate) const PROFILE_DIR: &str = "/etc/wireguard";
 
 pub fn list_profiles() -> Vec<String> {
     let Ok(entries) = fs::read_dir(PROFILE_DIR) else {
@@ -32,6 +32,12 @@ pub fn list_profiles() -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// True when this profile still contains an unfilled
+/// `WriteProviderTemplate` placeholder — see `util::INCOMPLETE_MARKER`.
+pub fn is_incomplete(name: &str) -> bool {
+    crate::util::file_is_incomplete(&format!("{PROFILE_DIR}/{name}.conf"))
 }
 
 pub fn up(name: &str) -> NyxResult<()> {

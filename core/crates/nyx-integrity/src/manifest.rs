@@ -38,6 +38,8 @@ pub const MANIFEST_TARGETS: &[&str] = &[
     "/usr/lib/systemd/system/nyx-vpn-xray@.service",
     "/usr/lib/systemd/system/nyx-vpn-hysteria@.service",
     "/usr/lib/systemd/system/nyx-vpn-socks5@.service",
+    "/usr/lib/systemd/system/nyx-vpn-mieru@.service",
+    "/usr/lib/systemd/system/nyx-vpn-cloak@.service",
     "/usr/lib/systemd/system/nyx-identity.service",
     "/usr/lib/systemd/system/nyx-devices.service",
     "/usr/lib/systemd/system/nyx-telemetry.service",

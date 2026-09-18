@@ -40,6 +40,7 @@ const VPN_PROTOCOLS: &[(VpnProtocol, &str)] = &[
     (VpnProtocol::Shadowsocks, "Shadowsocks"),
     (VpnProtocol::Hysteria2, "Hysteria2"),
     (VpnProtocol::Socks5, "SOCKS5"),
+    (VpnProtocol::Mieru, "mieru"),
 ];
 
 /// Tor's SocksPort only carries TCP, so only the three backends that dial
@@ -50,7 +51,10 @@ const VPN_PROTOCOLS: &[(VpnProtocol, &str)] = &[
 /// chaining flag) are rejected outright by nyx-vpn itself, not just hidden
 /// here.
 fn protocol_supports_tor_chaining(protocol: VpnProtocol) -> bool {
-    matches!(protocol, VpnProtocol::OpenVpn | VpnProtocol::Xray | VpnProtocol::Shadowsocks)
+    matches!(
+        protocol,
+        VpnProtocol::OpenVpn | VpnProtocol::Xray | VpnProtocol::Shadowsocks | VpnProtocol::Mieru
+    )
 }
 
 /// Each backend's real, on-disk profile directory — see the `PROFILE_DIR`
@@ -68,6 +72,7 @@ fn profile_dir(protocol: VpnProtocol) -> &'static str {
         VpnProtocol::Shadowsocks => "/etc/shadowsocks-rust",
         VpnProtocol::Hysteria2 => "/etc/nyx/hysteria",
         VpnProtocol::Socks5 => "/etc/nyx/socks5",
+        VpnProtocol::Mieru => "/etc/nyx/mieru",
     }
 }
 
