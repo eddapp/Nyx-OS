@@ -71,8 +71,16 @@ impl Posture {
 }
 
 // ---------------------------------------------------------------------------
-// LibreWolf policy payloads. Real, documented Firefox/LibreWolf enterprise
-// policy keys only — no invented schema:
+// Zen Browser policy payloads. Zen is Firefox-based and reads the same real,
+// documented Mozilla enterprise policy schema every Firefox-family browser
+// does — no invented schema:
+//   - "DisableAppUpdate"                       (documented top-level policy;
+//     kept `true` in every tier, matching the zen-browser-bin package's own
+//     shipped default — pacman, not Zen's built-in updater, owns updates
+//     here, same reasoning the AUR package itself already applies)
+//   - "DefaultSerialGuardSetting"              (documented top-level policy;
+//     preserved at the package's own shipped default value, unrelated to
+//     posture — not something this feature is trying to change)
 //   - "DisableTelemetry"                       (documented top-level policy)
 //   - "DNSOverHTTPS": {Enabled, Locked}        (documented top-level policy;
 //     forced off because nyx-dns already owns DNS enforcement at the OS
@@ -81,18 +89,25 @@ impl Posture {
 //   - "Preferences": {<pref>: {Value, Status}} (documented generic pref-lock
 //     mechanism, used here for `media.peerconnection.enabled` = false to
 //     disable WebRTC, and for Paranoid, `browser.privatebrowsing.autostart`
-//     = true — the exact pref backing Firefox/LibreWolf's own "Always use
-//     private browsing mode" setting)
+//     = true — the exact pref backing Firefox-family browsers' own "Always
+//     use private browsing mode" setting)
 //   - "PasswordManagerEnabled"                 (documented top-level policy;
 //     Paranoid only)
-// Written to `/etc/librewolf/policies/policies.json`, which LibreWolf reads
-// and which takes priority over `/etc/firefox/policies/policies.json` and
-// the bundled `distribution/policies.json` — there is no merging between
-// them, so shipping one complete file per posture is the correct model.
+// Written to `/opt/zen-browser-bin/distribution/policies.json` — the real
+// path this specific AUR package (a prebuilt tarball release under /opt,
+// not a system-package layout with an /etc/<vendor>/policies.json
+// convention) reads its policy from; confirmed against the package's own
+// PKGBUILD, which uses this exact mechanism itself to ship
+// `DisableAppUpdate`/`DefaultSerialGuardSetting` defaults. There is no
+// merging across multiple policy files — whatever this feature writes here
+// fully replaces the package's own shipped file, which is why both of its
+// original keys are carried forward explicitly below rather than dropped.
 // ---------------------------------------------------------------------------
 
 const STANDARD_POLICY_JSON: &str = r#"{
   "policies": {
+    "DisableAppUpdate": true,
+    "DefaultSerialGuardSetting": 3,
     "DisableTelemetry": true,
     "DNSOverHTTPS": {
       "Enabled": false,
@@ -104,6 +119,8 @@ const STANDARD_POLICY_JSON: &str = r#"{
 
 const MEDIUM_POLICY_JSON: &str = r#"{
   "policies": {
+    "DisableAppUpdate": true,
+    "DefaultSerialGuardSetting": 3,
     "DisableTelemetry": true,
     "DNSOverHTTPS": {
       "Enabled": false,
@@ -121,6 +138,8 @@ const MEDIUM_POLICY_JSON: &str = r#"{
 
 const PARANOID_POLICY_JSON: &str = r#"{
   "policies": {
+    "DisableAppUpdate": true,
+    "DefaultSerialGuardSetting": 3,
     "DisableTelemetry": true,
     "DNSOverHTTPS": {
       "Enabled": false,
@@ -212,7 +231,7 @@ fn build_standard() -> Workflow {
                 rollback_hint: STATUS_ROLLBACK,
             },
             Step {
-                description: "Apply Standard LibreWolf policy (telemetry off, browser DoH off \
+                description: "Apply Standard Zen Browser policy (telemetry off, browser DoH off \
                                so nyx-dns stays the only resolver — everything else default)",
                 cmd: WorkflowCommand::ApplyBrowserPolicy {
                     label: "Standard",
@@ -221,7 +240,7 @@ fn build_standard() -> Workflow {
                 condition: Condition::Always,
                 danger: DangerLevel::Low,
                 confirm: false,
-                rollback_hint: "Re-run this posture, or hand-edit /etc/librewolf/policies/policies.json.",
+                rollback_hint: "Re-run this posture, or hand-edit /opt/zen-browser-bin/distribution/policies.json.",
             },
         ],
     }
@@ -328,12 +347,12 @@ fn build_medium() -> Workflow {
     steps.extend(medium_steps());
 
     steps.push(Step {
-        description: "Apply Medium LibreWolf policy (telemetry off, browser DoH off, WebRTC disabled)",
+        description: "Apply Medium Zen Browser policy (telemetry off, browser DoH off, WebRTC disabled)",
         cmd: WorkflowCommand::ApplyBrowserPolicy { label: "Medium", policy_json: MEDIUM_POLICY_JSON },
         condition: Condition::Always,
         danger: DangerLevel::Low,
         confirm: false,
-        rollback_hint: "Re-run this posture, or hand-edit /etc/librewolf/policies/policies.json.",
+        rollback_hint: "Re-run this posture, or hand-edit /opt/zen-browser-bin/distribution/policies.json.",
     });
 
     Workflow { id: Posture::Medium.id(), description: Posture::Medium.description(), steps }
@@ -391,13 +410,13 @@ fn build_paranoid() -> Workflow {
     });
 
     steps.push(Step {
-        description: "Apply Paranoid LibreWolf policy (telemetry/DoH/WebRTC off, private-browsing-only, \
+        description: "Apply Paranoid Zen Browser policy (telemetry/DoH/WebRTC off, private-browsing-only, \
                        password saving disabled)",
         cmd: WorkflowCommand::ApplyBrowserPolicy { label: "Paranoid", policy_json: PARANOID_POLICY_JSON },
         condition: Condition::Always,
         danger: DangerLevel::Low,
         confirm: false,
-        rollback_hint: "Re-run this posture, or hand-edit /etc/librewolf/policies/policies.json.",
+        rollback_hint: "Re-run this posture, or hand-edit /opt/zen-browser-bin/distribution/policies.json.",
     });
 
     // Same interactive-confirmation UX `emergency-lockdown`/`kill-switch-drill`

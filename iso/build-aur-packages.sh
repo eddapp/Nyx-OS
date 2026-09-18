@@ -5,20 +5,17 @@
 # uses for NyxOS's own packages, just pointed at aur.archlinux.org checkouts
 # instead of install/pkgbuild/ dirs.
 #
-# Not currently wired into iso/build.sh. Original motivating case for this
-# file was packaging LibreWolf: it turned out LibreWolf now ships straight
-# from Arch's own [extra] repo (`pacman -Si librewolf` on this build host
-# resolves to Repository: extra, packaged by an official Arch dev) and the
-# librewolf-bin/librewolf AUR packages have been removed from the AUR
-# entirely (checked both `aur.archlinux.org/rpc/v5/info` and a name search —
-# zero hits). So AUR_PACKAGES is intentionally empty below: there is no
-# NyxOS-needed AUR-only package right now. This script is kept anyway as
-# real, working, general infrastructure for the next one, rather than
-# hard-coding a package name that would make every build fail on a 404
-# git clone.
+# Wired into iso/build.sh (see the NYX_PACKAGES build loop there). Original
+# motivating case for this file was packaging LibreWolf: it turned out
+# LibreWolf ships straight from Arch's own [extra] repo instead, so no AUR
+# step was needed for it after all. The real, current need is
+# `zen-browser-bin` — NyxOS's default browser as of this build — which has
+# no official or BlackArch package at all; confirmed via
+# `aur.archlinux.org/rpc/v5/info` that the AUR entry is real, current, and
+# ships a prebuilt release tarball (not a from-source Firefox-scale build,
+# which has no place in an ISO pipeline).
 #
-# Usage, once NyxOS actually needs an AUR-only package (add its name to
-# AUR_PACKAGES below first), wired into iso/build.sh with:
+# Usage:
 #
 #   source "$PROFILE_DIR/build-aur-packages.sh"
 #   build_aur_packages "$LOCAL_REPO_DIR"
@@ -38,10 +35,9 @@
 set -euo pipefail
 
 # One AUR package name per line (the AUR git repo name — usually, but not
-# always, identical to the built package's pkgname). Empty right now — see
-# the header comment above for why.
+# always, identical to the built package's pkgname).
 AUR_PACKAGES=(
-    # librewolf-bin  # removed from the AUR; librewolf ships in [extra] now
+    zen-browser-bin
 )
 
 # build_aur_packages <local_repo_dir>

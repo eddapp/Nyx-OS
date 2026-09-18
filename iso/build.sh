@@ -23,6 +23,8 @@ OUT_DIR="$PROFILE_DIR/out"
 BUILD_PACMAN_CONF="$PROFILE_DIR/pacman.conf.local"
 BLACKARCH_KEY="4345771566D76038C7FEB43863EC0ADBEA87E4E3"
 NYX_PACKAGES=(nyx-health nyx-vpn nyx-identity nyx-devices nyx-telemetry nyx-diagnostics nyx-dns nyx-integrity nyx-wipe nyx-isolation nyx-workflow nyx-thunar-integration nyx-desktop-sessions nyx-dashboard)
+# shellcheck source=build-aur-packages.sh
+source "$PROFILE_DIR/build-aur-packages.sh"
 
 PROFILE="desktop"
 CLEAN=0
@@ -141,6 +143,13 @@ for pkg in "${NYX_PACKAGES[@]}"; do
     (cd "$PKGBUILD_DIR/$pkg" && PKGDEST="$LOCAL_REPO_DIR" makepkg -f --noconfirm)
 done
 repo-add "$LOCAL_REPO_DIR/nyxos.db.tar.gz" "$LOCAL_REPO_DIR"/*.pkg.tar.zst
+
+# --- Build any AUR-only packages (currently: zen-browser-bin) into the same
+# local repo and re-index. build_aur_packages does its own repo-add over
+# everything now in $LOCAL_REPO_DIR (NYX_PACKAGES output included), so this
+# is a harmless re-index when AUR_PACKAGES is non-empty and a no-op ---
+# (it returns early, before touching the repo at all) when it's empty. ---
+build_aur_packages "$LOCAL_REPO_DIR"
 
 # pacman.conf.local = the checked-in pacman.conf + a [nyxos] repo pointing at
 # the local-repo dir we just built. Regenerated every run since the absolute

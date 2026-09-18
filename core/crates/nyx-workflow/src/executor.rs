@@ -52,31 +52,34 @@ fn call_devices(cmd: DevicesCommand) -> (bool, String) {
 }
 
 /// Stages `policy_json` to a temp file the invoking user can write, then
-/// asks `pkexec` to install it as `/etc/librewolf/policies/policies.json`
-/// (mode 0644, creating the directory if needed) — LibreWolf reads that
-/// exact path and it wins over `/etc/firefox/policies/policies.json` and
-/// the bundled `distribution/policies.json`, with no merging between them,
-/// so writing this one file fully determines the browser's policy state.
+/// asks `pkexec` to install it as
+/// `/opt/zen-browser-bin/distribution/policies.json` (mode 0644, creating
+/// the directory if needed) — the real path this specific AUR package (a
+/// prebuilt tarball release under `/opt`, not an `/etc/<vendor>/`-style
+/// system package) reads its policy from; there is no merging across
+/// multiple policy files, so writing this one file fully determines the
+/// browser's policy state.
+const ZEN_POLICY_PATH: &str = "/opt/zen-browser-bin/distribution/policies.json";
+
 fn apply_browser_policy(label: &str, policy_json: &str) -> (bool, String) {
-    let tmp = std::env::temp_dir().join(format!("nyx-librewolf-policy-{}.json", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("nyx-zen-browser-policy-{}.json", std::process::id()));
     if let Err(e) = std::fs::write(&tmp, policy_json) {
-        return (false, format!("could not stage {label} LibreWolf policy file: {e}"));
+        return (false, format!("could not stage {label} Zen Browser policy file: {e}"));
     }
 
     let result = std::process::Command::new("pkexec")
-        .args(["install", "-Dm644", &tmp.to_string_lossy(), "/etc/librewolf/policies/policies.json"])
+        .args(["install", "-Dm644", &tmp.to_string_lossy(), ZEN_POLICY_PATH])
         .status();
     let _ = std::fs::remove_file(&tmp);
 
     match result {
-        Ok(status) if status.success() => (
-            true,
-            format!("installed {label} LibreWolf policy to /etc/librewolf/policies/policies.json"),
-        ),
+        Ok(status) if status.success() => {
+            (true, format!("installed {label} Zen Browser policy to {ZEN_POLICY_PATH}"))
+        }
         Ok(status) => (
             false,
             format!(
-                "pkexec install exited with {status} — {label} LibreWolf policy was NOT applied \
+                "pkexec install exited with {status} — {label} Zen Browser policy was NOT applied \
                  (auth prompt declined, or polkit/pkexec unavailable)"
             ),
         ),

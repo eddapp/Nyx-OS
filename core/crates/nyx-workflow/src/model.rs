@@ -31,10 +31,10 @@ pub enum WorkflowCommand {
     DevicesSetMicrophone { enabled: bool },
     DevicesSetRadio { radio: DeviceRadio, on: bool },
     /// Purely local — writes `policy_json` to
-    /// `/etc/librewolf/policies/policies.json` via `pkexec install`
-    /// (LibreWolf reads that exact path and it takes priority over
-    /// `/etc/firefox/policies/policies.json`). `label` is only for the
-    /// human-readable step result, e.g. "Paranoid".
+    /// `/opt/zen-browser-bin/distribution/policies.json` via `pkexec
+    /// install` (the real policy path for this AUR package's tarball-style
+    /// install). `label` is only for the human-readable step result, e.g.
+    /// "Paranoid".
     ApplyBrowserPolicy { label: &'static str, policy_json: &'static str },
     /// Purely local — print informational text, always succeeds.
     Message(String),

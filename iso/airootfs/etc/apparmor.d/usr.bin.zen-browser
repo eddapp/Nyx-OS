@@ -1,11 +1,23 @@
-# NyxOS AppArmor profile for LibreWolf — confines the browser's parent and
+# NyxOS AppArmor profile for Zen Browser — confines the browser's parent and
 # content processes to what a Firefox-family browser actually needs.
 #
 # This is an independent design written against AppArmor's own documented
 # rule syntax (apparmor.d(5), the abi/4.0 feature set shipped by the
-# `apparmor` 4.1.7 package NyxOS installs) and Firefox/LibreWolf's publicly
+# `apparmor` 4.1.7 package NyxOS installs) and Firefox/Zen's publicly
 # documented multi-process/namespace sandbox model. It is not copied from
 # any other distro's or project's shipped profile.
+#
+# Real install-path reasoning: the `zen-browser-bin` AUR package (real
+# binary release, not built from source — Firefox-scale source builds don't
+# belong in an ISO pipeline) installs a thin wrapper at /usr/bin/zen-browser
+# that does a plain `exec /opt/zen-browser-bin/zen-bin "$@"` — a direct exec,
+# no fork. So this profile attaches at the wrapper path (the actual first
+# exec target from the .desktop launcher) and grants the real binary `ix`
+# (execute, inherit this same profile) rather than trying to force one
+# attachment glob across two unrelated directory trees. Profile data lives
+# under ~/.config/zen/ and ~/.cache/zen/ for this tarball-style install
+# (confirmed against Zen's own install docs) — NOT ~/.zen/, which is a
+# different, non-tarball packaging convention this build doesn't use.
 #
 # Scope note: this profile does NOT contain a `network` rule block. AppArmor
 # only starts mediating a given resource class once a profile contains at
@@ -22,14 +34,7 @@ abi <abi/4.0>,
 
 #include <tunables/global>
 
-# Real install path reasoning: Arch's `librewolf` package (now shipped from
-# the official [extra] repo) follows the same layout Arch's `firefox`
-# package uses — a wrapper at /usr/bin/librewolf and the actual ELF binary
-# under /usr/lib/librewolf/librewolf. The brace-expansion attachment path
-# below covers whichever of the two paths the kernel actually execs, since
-# AppArmor attaches by the path passed to exec(), and that differs between
-# "run the wrapper" and "the wrapper execs the real binary directly".
-profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected) {
+profile zen-browser /usr/bin/zen-browser flags=(attach_disconnected) {
   #include <abstractions/base>
   #include <abstractions/fonts>
   #include <abstractions/nameservice>
@@ -40,8 +45,8 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
   # sandbox on top of unprivileged user namespaces (unshare(CLONE_NEWUSER)
   # plus mount/pid namespaces for the content process jail). On AppArmor
   # 4.x, creating a user namespace from inside a confined profile is
-  # mediated by its own `userns` rule; without it here, LibreWolf doesn't
-  # get denied outright — it silently falls back to running its content
+  # mediated by its own `userns` rule; without it here, Zen doesn't get
+  # denied outright — it silently falls back to running its content
   # processes without its own internal sandbox layer, which is worse than
   # either failing loudly or being properly confined. Grant it explicitly.
   userns,
@@ -50,25 +55,28 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
   # built-in crash/sandbox monitor, ptrace its own content processes; both
   # are scoped to peers running under this same profile, never a bare
   # "ptrace anything" grant.
-  signal (send, receive) peer=librewolf,
-  ptrace (read, trace) peer=librewolf,
+  signal (send, receive) peer=zen-browser,
+  ptrace (read, trace) peer=zen-browser,
 
   # Anonymous AF_UNIX socketpairs are how the parent process talks to its
   # own content/GPU/socket processes. Scoped to same-profile peers only.
-  unix (send, receive, connect, accept) type=stream peer=(label=librewolf),
+  unix (send, receive, connect, accept) type=stream peer=(label=zen-browser),
 
   # --- The browser binary itself ---------------------------------------
-  /usr/{bin,lib/librewolf}/librewolf mr,
-  /usr/lib/librewolf/** mr,
+  # Wrapper script (this profile's own attachment point, read so bash can
+  # interpret it) execs directly into the real binary, staying under this
+  # same profile (`ix`) rather than transitioning to a differently-named
+  # one or going unconfined.
+  /usr/bin/zen-browser r,
+  /opt/zen-browser-bin/zen-bin ix,
+  /opt/zen-browser-bin/** mr,
 
   # --- Profile / cache / config: full read-write, this is the browser's
   # own data --------------------------------------------------------------
-  owner @{HOME}/.librewolf/ rw,
-  owner @{HOME}/.librewolf/** rwk,
-  owner @{HOME}/.cache/librewolf/ rw,
-  owner @{HOME}/.cache/librewolf/** rwk,
-  owner @{HOME}/.config/librewolf/ rw,
-  owner @{HOME}/.config/librewolf/** rwk,
+  owner @{HOME}/.config/zen/ rw,
+  owner @{HOME}/.config/zen/** rwk,
+  owner @{HOME}/.cache/zen/ rw,
+  owner @{HOME}/.cache/zen/** rwk,
 
   # --- Deliberately scoped general file access -------------------------
   #
@@ -77,7 +85,7 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
   # A compromised content process is still confined by this profile even
   # after any internal sandbox bypass, and the whole point of that second
   # layer is defeated if it can read or write anything anywhere in the
-  # user's home directory — a broad home-wide grant would hand a exploited
+  # user's home directory — a broad home-wide grant would hand an exploited
   # renderer every private document, SSH key, or password vault in
   # @{HOME} for free. Downloads/Desktop are where a browser legitimately
   # needs to save files a user asked it to save, and nowhere else.
@@ -93,9 +101,6 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
   owner /tmp/ rw,
 
   # --- Read-only system paths -------------------------------------------
-  /etc/librewolf/ r,
-  /etc/librewolf/** r,
-
   /usr/share/fonts/** r,
   /etc/fonts/** r,
   /usr/share/fontconfig/** r,
@@ -110,8 +115,8 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
 
   # --- D-Bus session bus / xdg-desktop-portal ---------------------------
   #
-  # Scoped to the portal and notification interfaces LibreWolf actually
-  # calls (file picker, screen-share picker, notifications), not a blanket
+  # Scoped to the portal and notification interfaces Zen actually calls
+  # (file picker, screen-share picker, notifications), not a blanket
   # session-bus abstraction.
   dbus send bus=session peer=(name=org.freedesktop.DBus),
   dbus receive bus=session peer=(name=org.freedesktop.DBus),
@@ -172,9 +177,9 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
   # `Cx` (clean exec, child-profile transition) rather than `ix` (stay in
   # this profile) or `ux` (fully unconfined): a MIME-handler exploit
   # triggered by opening a downloaded file should not inherit this
-  # profile's Downloads/Desktop *write* access or its librewolf profile/
-  # cache/config access. The child profile below gets read-only access to
-  # what it needs to resolve and hand off to a handler, nothing more.
+  # profile's Downloads/Desktop *write* access or its Zen profile/cache
+  # access. The child profile below gets read-only access to what it needs
+  # to resolve and hand off to a handler, nothing more.
   /usr/bin/xdg-open Cx -> xdg-open,
   /usr/bin/xdg-mime Cx -> xdg-open,
 
@@ -195,7 +200,7 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
 
     # Read-only on Downloads/Desktop: this helper needs to read the file
     # it's handing off to a handler, but never gets the write access the
-    # parent librewolf profile has there.
+    # parent zen-browser profile has there.
     owner @{HOME}/Downloads/** r,
     owner @{HOME}/Desktop/** r,
     owner /tmp/** r,
@@ -215,9 +220,8 @@ profile librewolf /usr/{bin,lib/librewolf}/librewolf flags=(attach_disconnected)
     /usr/local/bin/* ix,
 
     deny /root/** rwklx,
-    deny @{HOME}/.librewolf/** rwklx,
-    deny @{HOME}/.cache/librewolf/** rwklx,
-    deny @{HOME}/.config/librewolf/** rwklx,
+    deny @{HOME}/.config/zen/** rwklx,
+    deny @{HOME}/.cache/zen/** rwklx,
     deny @{HOME}/Downloads/** w,
     deny @{HOME}/Desktop/** w,
     deny /etc/nyx/** rwklx,
