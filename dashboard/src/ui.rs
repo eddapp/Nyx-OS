@@ -7,8 +7,8 @@ use gtk::glib;
 use gtk::prelude::*;
 use nyx_core::protocol::{FreeProvider, TemplateProvider};
 use nyx_core::{
-    CloakConfig, DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
-    IdentityCommand, IdentityReport, IntegrityCommand, IntegrityReport, KillSwitchLevel,
+    CloakConfig, DevicesCommand, DevicesReport, DnsCommand, DnsProvider, DnsReport, HealthCommand,
+    HealthState, IdentityCommand, IdentityReport, IntegrityCommand, IntegrityReport, KillSwitchLevel,
     NyxOutput, SecurityState, SocksProxyAddr, TelemetryCommand, TelemetryReport, Toggle,
     VpnCommand, VpnProtocol, VpnReport,
 };
@@ -527,8 +527,22 @@ pub fn build(app: &gtk::Application) {
 
     let (tor_row, tor_dot, tor_label) = status_row("Tor");
     network_tab.append(&tor_row);
+    let tor_action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let tor_btn = gtk::Button::with_label("Toggle Tor");
-    network_tab.append(&tor_btn);
+    // Renewing a circuit only means something once Tor is actually up —
+    // disabled here and re-enabled/disabled in `apply` below as
+    // `HealthState.tor_active` changes, same low-risk/reversible category
+    // as the "lock screen" periodic task, so no confirmation dialog.
+    let tor_renew_btn = gtk::Button::with_label("Renew Tor Circuit");
+    tor_renew_btn.set_sensitive(false);
+    tor_action_row.append(&tor_btn);
+    tor_action_row.append(&tor_renew_btn);
+    network_tab.append(&tor_action_row);
+
+    let tor_renew_status_label = gtk::Label::new(None);
+    tor_renew_status_label.set_wrap(true);
+    tor_renew_status_label.set_halign(gtk::Align::Start);
+    network_tab.append(&tor_renew_status_label);
 
     network_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
     network_tab.append(&section_heading("VPN"));
@@ -1075,6 +1089,84 @@ pub fn build(app: &gtk::Application) {
     dns_detail_label.set_halign(gtk::Align::Start);
     dns_detail_label.set_wrap(true);
     network_tab.append(&dns_detail_label);
+
+    // --- DNS provider switching ------------------------------------------
+    // Curated providers + which one is live, from `DnsCommand::ListProviders`
+    // (read from the deployed dnscrypt-proxy config, not the curated list
+    // itself) — populated once when this tab is built, same "fetched once,
+    // not on the timer" convention as the Hardening tab's posture list.
+    let dns_provider_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let dns_provider_dropdown = gtk::DropDown::from_strings(&[]);
+    let dns_provider_switch_btn = gtk::Button::with_label("Switch");
+    dns_provider_row.append(&dns_provider_dropdown);
+    dns_provider_row.append(&dns_provider_switch_btn);
+    network_tab.append(&dns_provider_row);
+
+    let dns_provider_empty_label = gtk::Label::new(Some("loading DNS providers…"));
+    dns_provider_empty_label.set_wrap(true);
+    dns_provider_empty_label.set_halign(gtk::Align::Start);
+    network_tab.append(&dns_provider_empty_label);
+
+    let dns_provider_status_label = gtk::Label::new(None);
+    dns_provider_status_label.set_wrap(true);
+    dns_provider_status_label.set_halign(gtk::Align::Start);
+    network_tab.append(&dns_provider_status_label);
+
+    // Real provider ids/display-names/active-flags, in the same order as
+    // `dns_provider_dropdown`'s model — `DnsCommand::ListProviders` is the
+    // only source of truth; the id (never the internal stamp name) is what
+    // gets sent back on `SwitchProvider`.
+    let dns_providers_state: Rc<RefCell<Vec<DnsProvider>>> = Rc::new(RefCell::new(Vec::new()));
+
+    fn refresh_dns_providers(
+        dropdown: gtk::DropDown,
+        empty_label: gtk::Label,
+        providers_state: Rc<RefCell<Vec<DnsProvider>>>,
+    ) {
+        let apply: DnsApplyFn = Rc::new(move |result| match result {
+            Ok(out) => {
+                let providers: Vec<DnsProvider> =
+                    out.data.map(|report| report.providers).unwrap_or_default();
+                if providers.is_empty() {
+                    dropdown.set_model(gtk::gio::ListModel::NONE);
+                    dropdown.set_visible(false);
+                    empty_label.set_label("no DNS providers reported by nyx-dns");
+                    empty_label.set_visible(true);
+                } else {
+                    let labels: Vec<String> = providers
+                        .iter()
+                        .map(|p| {
+                            if p.active {
+                                format!("{} (active)", p.display_name)
+                            } else {
+                                p.display_name.clone()
+                            }
+                        })
+                        .collect();
+                    let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
+                    dropdown.set_model(Some(&gtk::StringList::new(&refs)));
+                    let active_idx = providers.iter().position(|p| p.active).unwrap_or(0);
+                    dropdown.set_selected(active_idx as u32);
+                    dropdown.set_visible(true);
+                    empty_label.set_visible(false);
+                }
+                *providers_state.borrow_mut() = providers;
+            }
+            Err(e) => {
+                dropdown.set_model(gtk::gio::ListModel::NONE);
+                dropdown.set_visible(false);
+                empty_label.set_label(&format!("could not list DNS providers: {e}"));
+                empty_label.set_visible(true);
+            }
+        });
+        run_dns_command(DnsCommand::ListProviders, apply);
+    }
+
+    refresh_dns_providers(
+        dns_provider_dropdown.clone(),
+        dns_provider_empty_label.clone(),
+        Rc::clone(&dns_providers_state),
+    );
 
     let public_ip_label = gtk::Label::new(Some("Public IP: not checked"));
     public_ip_label.set_halign(gtk::Align::Start);
@@ -1661,8 +1753,13 @@ pub fn build(app: &gtk::Application) {
     let (integrity_row, integrity_dot, integrity_label) = status_row("Integrity");
     emergency_tab.append(&integrity_row);
 
+    let integrity_action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let verify_installation_btn = gtk::Button::with_label("Verify Installation");
-    emergency_tab.append(&verify_installation_btn);
+    let rebaseline_btn = gtk::Button::with_label("Re-baseline (Trust Current State)");
+    rebaseline_btn.add_css_class("destructive-action");
+    integrity_action_row.append(&verify_installation_btn);
+    integrity_action_row.append(&rebaseline_btn);
+    emergency_tab.append(&integrity_action_row);
 
     let integrity_detail_label = gtk::Label::new(None);
     integrity_detail_label.set_wrap(true);
@@ -1710,11 +1807,13 @@ pub fn build(app: &gtk::Application) {
 
     let apply: ApplyFn = {
         let cached = Rc::clone(&cached);
+        let tor_renew_btn = tor_renew_btn.clone();
         Rc::new(move |result: Result<NyxOutput<HealthState>, String>| match result {
             Ok(out) => {
                 if let Some(state) = out.data.clone() {
                     set_dot(&tor_dot, state.tor_active);
                     set_dot(&header_tor_dot, state.tor_active);
+                    tor_renew_btn.set_sensitive(state.tor_active);
                     set_level_dot(&ks_dot, state.kill_switch_level);
                     set_dot(&panic_dot, state.panic_mode);
                     tor_label.set_label(&format!(
@@ -1744,6 +1843,21 @@ pub fn build(app: &gtk::Application) {
                 status_label.set_label(&out.message);
             }
             Err(e) => status_label.set_label(&format!("error: {e}")),
+        })
+    };
+
+    // Wraps `apply` so a manual circuit renewal also shows nyx-health's
+    // real result message on its own label, next to the button, rather
+    // than only in the shared status bar at the bottom of the window.
+    let tor_renew_apply: ApplyFn = {
+        let tor_renew_status_label = tor_renew_status_label.clone();
+        let apply = Rc::clone(&apply);
+        Rc::new(move |result: Result<NyxOutput<HealthState>, String>| {
+            match &result {
+                Ok(out) => tor_renew_status_label.set_label(&out.message),
+                Err(e) => tor_renew_status_label.set_label(&format!("error: {e}")),
+            }
+            apply(result);
         })
     };
 
@@ -2426,6 +2540,114 @@ pub fn build(app: &gtk::Application) {
         let integrity_apply = Rc::clone(&integrity_apply);
         move |_| {
             run_integrity_command(IntegrityCommand::Verify { quick: true }, Rc::clone(&integrity_apply));
+        }
+    });
+
+    // Re-baselining trusts whatever is on disk right now — genuinely
+    // dangerous if the system is already compromised, since it would
+    // "bless" the compromise into the manifest a future Verify checks
+    // against. Gated behind a confirmation naming that risk explicitly,
+    // same pattern as Panic/posture-apply/dangerous-periodic-tasks above.
+    rebaseline_btn.connect_clicked({
+        let integrity_apply = Rc::clone(&integrity_apply);
+        let window = window.clone();
+        move |_| {
+            let confirm = gtk::AlertDialog::builder()
+                .modal(true)
+                .message("Re-baseline the integrity manifest?")
+                .detail(
+                    "This overwrites the trust manifest with hashes of whatever is on disk right \
+                     now. Only do this right after a known-good install or update — if the system \
+                     is already compromised, this makes that compromise the new trusted baseline. \
+                     Never use this just to clear a failed Verify result.",
+                )
+                .buttons(["Cancel", "Re-baseline"])
+                .cancel_button(0)
+                .default_button(0)
+                .build();
+
+            let integrity_apply = Rc::clone(&integrity_apply);
+            confirm.choose(Some(&window), gtk::gio::Cancellable::NONE, move |response| {
+                if response == Ok(1) {
+                    run_integrity_command(IntegrityCommand::Baseline, Rc::clone(&integrity_apply));
+                }
+            });
+        }
+    });
+
+    tor_renew_btn.connect_clicked({
+        let tor_renew_apply = Rc::clone(&tor_renew_apply);
+        let tor_renew_status_label = tor_renew_status_label.clone();
+        move |_| {
+            tor_renew_status_label.set_label("Renewing Tor circuit…");
+            run_command(HealthCommand::TorRestart, Rc::clone(&tor_renew_apply));
+        }
+    });
+
+    // DNS provider switching changes the resolver the whole system uses,
+    // so it's gated behind a confirmation naming the provider — same
+    // pattern as Panic/posture-apply above. `SwitchProvider` already does
+    // its own live-query verification and automatic rollback on failure
+    // server-side, so this only ever surfaces nyx-dns's real result
+    // message, never re-verifies client-side.
+    dns_provider_switch_btn.connect_clicked({
+        let dns_provider_dropdown = dns_provider_dropdown.clone();
+        let dns_provider_empty_label = dns_provider_empty_label.clone();
+        let dns_provider_status_label = dns_provider_status_label.clone();
+        let dns_providers_state = Rc::clone(&dns_providers_state);
+        let dns_apply = Rc::clone(&dns_apply);
+        let window = window.clone();
+        move |_| {
+            let selected = dns_provider_dropdown.selected() as usize;
+            let Some(provider) = dns_providers_state.borrow().get(selected).cloned() else {
+                return;
+            };
+
+            let confirm = gtk::AlertDialog::builder()
+                .modal(true)
+                .message(format!("Switch DNS provider to {}?", provider.display_name))
+                .detail(
+                    "This changes the DNS resolver dnscrypt-proxy uses for the whole system. \
+                     nyx-dns verifies a live query still resolves after switching and \
+                     automatically rolls back to the previous provider if it doesn't.",
+                )
+                .buttons(["Cancel", "Switch"])
+                .cancel_button(0)
+                .default_button(0)
+                .build();
+
+            let dns_provider_dropdown = dns_provider_dropdown.clone();
+            let dns_provider_empty_label = dns_provider_empty_label.clone();
+            let dns_provider_status_label = dns_provider_status_label.clone();
+            let dns_providers_state = Rc::clone(&dns_providers_state);
+            let dns_apply = Rc::clone(&dns_apply);
+            confirm.choose(Some(&window), gtk::gio::Cancellable::NONE, move |response| {
+                if response != Ok(1) {
+                    return;
+                }
+                dns_provider_status_label.set_label("Switching…");
+                let dns_provider_dropdown = dns_provider_dropdown.clone();
+                let dns_provider_empty_label = dns_provider_empty_label.clone();
+                let dns_provider_status_label = dns_provider_status_label.clone();
+                let dns_providers_state = Rc::clone(&dns_providers_state);
+                let dns_apply = Rc::clone(&dns_apply);
+                let apply: DnsApplyFn = Rc::new(move |result| {
+                    match &result {
+                        Ok(out) => dns_provider_status_label.set_label(&out.message),
+                        Err(e) => dns_provider_status_label.set_label(&format!("error: {e}")),
+                    }
+                    refresh_dns_providers(
+                        dns_provider_dropdown.clone(),
+                        dns_provider_empty_label.clone(),
+                        Rc::clone(&dns_providers_state),
+                    );
+                    run_dns_command(DnsCommand::Status, Rc::clone(&dns_apply));
+                });
+                run_dns_command(
+                    DnsCommand::SwitchProvider { provider: provider.id.clone() },
+                    apply,
+                );
+            });
         }
     });
 }
