@@ -1,0 +1,133 @@
+# NyxOS server package set: the same vanilla Arch base + BlackArch
+# privacy/anonymity tool groups + Nyx control-layer daemons as
+# packages.x86_64, minus every package that exists only to put a GUI on the
+# screen. Every Nyx daemon (kill switch, VPN, DNS enforcement, identity
+# randomization, device control, integrity verification, telemetry,
+# diagnostics) is a systemd service with a Unix-socket control plane and
+# neither needs nor references a display — nyx-workflow and
+# nyx-diagnostics already give this profile full CLI access to everything
+# the desktop dashboard exposes. One package name per line, '#' starts a
+# comment.
+
+# --- Base system ---
+base
+base-devel
+linux
+linux-firmware
+linux-headers
+mkinitcpio
+mkinitcpio-archiso
+sudo
+which
+vim
+nano
+git
+man-db
+man-pages
+bash-completion
+reflector
+
+# --- Boot / install tooling ---
+syslinux
+grub
+efibootmgr
+intel-ucode
+amd-ucode
+dosfstools
+e2fsprogs
+gptfdisk
+parted
+arch-install-scripts
+archinstall
+rsync
+
+# --- Networking core ---
+networkmanager
+network-manager-applet
+nftables
+openssh
+wireguard-tools
+openvpn
+macchanger
+iproute2
+iputils
+traceroute
+curl
+
+# --- Privacy stack (control layer targets) ---
+tor
+dnscrypt-proxy
+
+# --- NyxOS control layer (built from install/pkgbuild/, see build.sh) ---
+# nyx-thunar-integration, nyx-desktop-sessions and nyx-dashboard are dropped
+# here: the first two only exist to integrate with Thunar/LightDM, which
+# this profile doesn't install, and the dashboard is a GTK application with
+# nothing to render on a headless box. Every other daemon/CLI is plain
+# systemd + a Unix socket and is fully controllable headless.
+nyx-health
+nyx-vpn
+nyx-identity
+nyx-devices
+nyx-telemetry
+nyx-diagnostics
+nyx-dns
+nyx-integrity
+nyx-wipe
+nyx-isolation
+nyx-workflow
+
+# --- Rust toolchain for the control layer ---
+# Still needed even on this profile: the Nyx packages above are built from
+# source at ISO-build time regardless of which profile is selected.
+rust
+
+# --- BlackArch: anonymity / anti-forensics / crypto tooling ---
+blackarch-anti-forensic
+blackarch-crypto
+blackarch-proxy
+blackarch-spoof
+blackarch-sniffer
+blackarch-networking
+blackarch-forensic
+
+# --- Wireless/Bluetooth/malware-analysis essentials (audited against
+# Kali's own tool metapackages 2026-09-18 — Kodachi has no equivalent for
+# these at all). Named individual tools, not whole blackarch-<category>
+# groups (a normal Kali or Kodachi install doesn't ship a category's full
+# tool set by default either) — these six are all in Arch's own official
+# `extra` repo, no BlackArch dependency needed for this part at all.
+aircrack-ng
+kismet
+wifite
+reaver
+bettercap
+yara
+
+# --- SDR + blue-team/defensive tooling: individual BlackArch packages,
+# same "named tools, not whole groups" reasoning as above. Kodachi has no
+# defensive-security angle at all, so this is a real differentiator rather
+# than catch-up. A security appliance benefits from this tooling with or
+# without a GUI. ---
+gqrx-scanner
+rtl-433
+chkrootkit
+suricata
+zeek
+
+# --- Application isolation (backs nyx-isolation) ---
+firejail
+firetools
+
+# --- Desktop security/privacy apps, wired into Thunar/nyx-wipe/nyx-isolation ---
+keepassxc
+mat2
+perl-image-exiftool
+wipe
+gocryptfs
+usbguard
+xterm
+ent
+gnupg
+xclip
+ethtool
+usbutils
