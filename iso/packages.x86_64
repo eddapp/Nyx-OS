@@ -53,6 +53,15 @@ curl
 tor
 dnscrypt-proxy
 
+# --- Secure communications: onion-routed messenger + anonymous file
+# sharing. Both real, independent projects (not NyxOS-authored) —
+# onionshare ships directly from Arch's own 'extra' repo; session-desktop
+# has no official/BlackArch package, built from AUR via
+# iso/build-aur-packages.sh into the local [nyxos] repo, same mechanism as
+# zen-browser-bin/oniux. ---
+onionshare
+session-desktop
+
 # --- Second anonymity network, alongside Tor. Ships its own systemd unit
 # (i2pd.service) with sane upstream defaults; deliberately not enabled by
 # default or wired into nyx-health — most users run one anonymity network

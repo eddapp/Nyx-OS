@@ -41,10 +41,18 @@ AUR_PACKAGES=(
     amneziawg-tools
     amneziawg-dkms
     hysteria-bin
+    # cloak-obfuscation-bin: prebuilt ck-client/ck-server binaries for
+    # nyx-vpn's OpenVPN-over-Cloak backend (core/crates/nyx-vpn/src/cloak.rs)
+    # — same shape as hysteria-bin above, just for Cloak.
+    cloak-obfuscation-bin
     # oniux builds from source via cargo (its own makedepends are 'cargo'
     # 'git', not a prebuilt tarball like the -bin packages above), so it's
     # slower through this same makepkg loop — expected, not a problem.
     oniux
+    # session-desktop builds from source (Electron/pnpm, makedepends
+    # 'cmake' 'git' 'nvm' 'pnpm') — real, current AUR package, slow like
+    # oniux for the same from-source reason.
+    session-desktop
 )
 
 # build_aur_packages <local_repo_dir>

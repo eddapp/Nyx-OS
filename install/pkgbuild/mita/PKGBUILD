@@ -1,0 +1,34 @@
+# Maintainer: NyxOS
+# mita — the server binary for the mieru anti-censorship proxy protocol
+# (github.com/enfein/mieru). Not packaged in Arch's official repos or the
+# AUR at all (checked `pacman -Si mita` and the AUR RPC API directly —
+# zero results), so this is a NyxOS-native, AUR-style package instead.
+#
+# Prebuilt-binary package sourced straight from upstream's own GitHub
+# Releases, matching this project's existing preference for prebuilt
+# binaries over from-source builds in an ISO pipeline. Confirmed via the
+# GitHub Releases API that v3.37.0 ships a genuine
+# `mita_3.37.0_linux_amd64.tar.gz` asset containing exactly one file, a
+# statically-linked x86-64 ELF binary named `mita` — no from-source Go
+# build needed or preferred here.
+#
+# nyx-vpn itself never depends on this package — it's the client `mieru`
+# binary that any nyx-vpn profile connects out through (see
+# install/pkgbuild/mieru/PKGBUILD). This package exists for anyone who
+# wants to self-host their own mieru server, kept separate since upstream
+# itself ships `mieru`/`mita` as two independent binaries and release
+# assets, not one.
+pkgname=mita
+pkgver=3.37.0
+pkgrel=1
+pkgdesc="mieru anti-censorship SOCKS5/HTTP/HTTPS proxy server (XChaCha20-Poly1305, replay-resistant)"
+arch=('x86_64')
+url="https://github.com/enfein/mieru"
+license=('GPL-3.0-only')
+provides=('mita')
+source=("mita_${pkgver}_linux_amd64.tar.gz::https://github.com/enfein/mieru/releases/download/v${pkgver}/mita_${pkgver}_linux_amd64.tar.gz")
+sha256sums=('ebd7a4f13204ac69864a385a9841708ac17e6622c1d7ef1f4415b39502c08591')
+
+package() {
+  install -Dm755 "$srcdir/mita" "$pkgdir/usr/bin/mita"
+}

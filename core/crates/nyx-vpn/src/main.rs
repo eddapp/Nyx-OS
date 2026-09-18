@@ -3,6 +3,7 @@ mod cloak;
 mod dante;
 mod handler;
 mod hysteria;
+mod mieru;
 mod openvpn;
 mod route;
 mod shadowsocks;

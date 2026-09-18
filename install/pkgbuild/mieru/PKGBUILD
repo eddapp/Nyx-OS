@@ -1,0 +1,33 @@
+# Maintainer: NyxOS
+# mieru client (github.com/enfein/mieru) — an anti-censorship SOCKS5/HTTP/
+# HTTPS proxy using XChaCha20-Poly1305 with random padding and a
+# client+server replay cache, purpose-built to resist DPI/GFW-style
+# traffic classification. Not packaged in Arch's official repos or the
+# AUR at all (checked `pacman -Si mieru` and the AUR RPC API directly —
+# zero results), so this is a NyxOS-native, AUR-style package instead.
+#
+# Prebuilt-binary package sourced straight from upstream's own GitHub
+# Releases, matching this project's existing preference for prebuilt
+# binaries over from-source builds in an ISO pipeline (same shape as
+# hysteria-bin/zen-browser-bin). Confirmed via the GitHub Releases API
+# that v3.37.0 ships a genuine `mieru_3.37.0_linux_amd64.tar.gz` asset
+# containing exactly one file, a statically-linked x86-64 ELF binary named
+# `mieru` — no from-source Go build needed or preferred here.
+#
+# The `mita` server binary is a wholly separate upstream release asset
+# (`mita_<ver>_linux_amd64.tar.gz`) and its own package — see
+# install/pkgbuild/mita/PKGBUILD. nyx-vpn only ever runs the client.
+pkgname=mieru
+pkgver=3.37.0
+pkgrel=1
+pkgdesc="mieru anti-censorship SOCKS5/HTTP/HTTPS proxy client (XChaCha20-Poly1305, replay-resistant)"
+arch=('x86_64')
+url="https://github.com/enfein/mieru"
+license=('GPL-3.0-only')
+provides=('mieru')
+source=("mieru_${pkgver}_linux_amd64.tar.gz::https://github.com/enfein/mieru/releases/download/v${pkgver}/mieru_${pkgver}_linux_amd64.tar.gz")
+sha256sums=('6c83b01454ab5d6628be0edc486ead659513acde22112bcca764ffcfbbed4a7b')
+
+package() {
+  install -Dm755 "$srcdir/mieru" "$pkgdir/usr/bin/mieru"
+}

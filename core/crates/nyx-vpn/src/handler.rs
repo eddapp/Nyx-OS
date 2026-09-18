@@ -1,5 +1,5 @@
 use crate::state::AppState;
-use crate::{amneziawg, cloak, dante, hysteria, openvpn, route, shadowsocks, wireguard, xray};
+use crate::{amneziawg, cloak, dante, hysteria, mieru, openvpn, route, shadowsocks, wireguard, xray};
 use nyx_core::{NyxOutput, SecurityState, VpnCommand, VpnProfile, VpnProtocol, VpnReport};
 use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
@@ -45,12 +45,12 @@ fn kernel_tunnel_status(
     }
 }
 
-/// Shared status derivation for the three local-proxy backends (Xray,
-/// Shadowsocks, Hysteria2): none of them are a kernel tunnel, none expose
-/// a handshake-recency concept over a simple CLI query, so the strongest
-/// honest signal is "the process is active and something is accepting
-/// connections on its configured local port" — never promoted to
-/// `Protected`.
+/// Shared status derivation for the local-proxy backends (Xray,
+/// Shadowsocks, Hysteria2, mieru): none of them are a kernel tunnel, none
+/// expose a handshake-recency concept over a simple CLI query, so the
+/// strongest honest signal is "the process is active and something is
+/// accepting connections on its configured local port" — never promoted
+/// to `Protected`.
 fn proxy_status(label: &str, profile: Option<&str>, reachable: impl Fn(&str) -> bool) -> (SecurityState, String) {
     let Some(profile) = profile else {
         return (
@@ -89,6 +89,7 @@ async fn probe(conn: &Connection, state: &AppState) -> VpnReport {
     let xray_profile = xray::find_active_profile(conn).await;
     let ss_profile = shadowsocks::find_active_profile(conn).await;
     let hysteria_profile = hysteria::find_active_profile(conn).await;
+    let mieru_profile = mieru::find_active_profile(conn).await;
     let socks5_ifaces = dante::active_interfaces();
     let default_iface = route::default_route_interface();
     let remembered = state.active.lock().await.clone();
@@ -117,6 +118,10 @@ async fn probe(conn: &Connection, state: &AppState) -> VpnReport {
         && hysteria_profile.as_deref() == Some(name.as_str())
     {
         (Some(VpnProtocol::Hysteria2), Some(name.clone()), None)
+    } else if let Some((VpnProtocol::Mieru, name)) = &remembered
+        && mieru_profile.as_deref() == Some(name.as_str())
+    {
+        (Some(VpnProtocol::Mieru), Some(name.clone()), None)
     } else if let Some((VpnProtocol::Socks5, name)) = &remembered
         && socks5_ifaces.contains(name)
     {
@@ -133,6 +138,8 @@ async fn probe(conn: &Connection, state: &AppState) -> VpnReport {
         (Some(VpnProtocol::Shadowsocks), Some(name.clone()), None)
     } else if let Some(name) = &hysteria_profile {
         (Some(VpnProtocol::Hysteria2), Some(name.clone()), None)
+    } else if let Some(name) = &mieru_profile {
+        (Some(VpnProtocol::Mieru), Some(name.clone()), None)
     } else if let Some(name) = socks5_ifaces.first() {
         (Some(VpnProtocol::Socks5), Some(name.clone()), Some(name.clone()))
     } else {
@@ -193,6 +200,9 @@ async fn probe(conn: &Connection, state: &AppState) -> VpnReport {
         }
         Some(VpnProtocol::Hysteria2) => {
             proxy_status("Hysteria2", profile.as_deref(), hysteria::local_proxy_reachable)
+        }
+        Some(VpnProtocol::Mieru) => {
+            proxy_status("mieru", profile.as_deref(), mieru::local_proxy_reachable)
         }
 
         Some(VpnProtocol::Socks5) => {
@@ -271,6 +281,9 @@ fn list_profiles() -> Vec<VpnProfile> {
     profiles.extend(
         dante::list_profiles().into_iter().map(|name| VpnProfile { protocol: VpnProtocol::Socks5, name }),
     );
+    profiles.extend(
+        mieru::list_profiles().into_iter().map(|name| VpnProfile { protocol: VpnProtocol::Mieru, name }),
+    );
     profiles
 }
 
@@ -282,6 +295,7 @@ async fn teardown(conn: &Connection, protocol: VpnProtocol, profile: &str) -> Re
         VpnProtocol::Xray => xray::down(conn, profile).await.map_err(|e| e.to_string()),
         VpnProtocol::Shadowsocks => shadowsocks::down(conn, profile).await.map_err(|e| e.to_string()),
         VpnProtocol::Hysteria2 => hysteria::down(conn, profile).await.map_err(|e| e.to_string()),
+        VpnProtocol::Mieru => mieru::down(conn, profile).await.map_err(|e| e.to_string()),
         VpnProtocol::Socks5 => dante::down(conn, profile).await.map_err(|e| e.to_string()),
     }
 }
@@ -361,6 +375,13 @@ pub async fn dispatch(conn: &Connection, state: &AppState, cmd: VpnCommand) -> N
                         Err(format!("no SOCKS5 profile named '{profile}' at /etc/nyx/socks5/"))
                     } else {
                         dante::up(conn, &profile).await.map_err(|e| e.to_string())
+                    }
+                }
+                VpnProtocol::Mieru => {
+                    if !mieru::list_profiles().contains(&profile) {
+                        Err(format!("no mieru profile named '{profile}' at /etc/nyx/mieru/"))
+                    } else {
+                        mieru::up(conn, &profile).await.map_err(|e| e.to_string())
                     }
                 }
             };
@@ -447,6 +468,15 @@ pub async fn dispatch(conn: &Connection, state: &AppState, cmd: VpnCommand) -> N
                         ))
                     } else {
                         shadowsocks::up_via_socks_proxy(conn, &profile, &socks_proxy.host, socks_proxy.port)
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                }
+                VpnProtocol::Mieru => {
+                    if !mieru::list_profiles().contains(&profile) {
+                        Err(format!("no mieru profile named '{profile}' at /etc/nyx/mieru/"))
+                    } else {
+                        mieru::up_via_socks_proxy(conn, &profile, &socks_proxy.host, socks_proxy.port)
                             .await
                             .map_err(|e| e.to_string())
                     }

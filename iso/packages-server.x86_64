@@ -37,6 +37,7 @@ dosfstools
 e2fsprogs
 gptfdisk
 parted
+cryptsetup
 arch-install-scripts
 archinstall
 rsync
@@ -48,7 +49,9 @@ nftables
 openssh
 wireguard-tools
 openvpn
-macchanger
+xray
+shadowsocks-rust
+badvpn
 iproute2
 iputils
 traceroute
@@ -57,6 +60,14 @@ curl
 # --- Privacy stack (control layer targets) ---
 tor
 dnscrypt-proxy
+
+# --- Second anonymity network, alongside Tor. Headless-friendly (i2pd is a
+# routing daemon, no GUI needed); not enabled by default, same reasoning as
+# the desktop profile. ---
+i2pd
+
+# --- Encrypted-container volumes; veracrypt's CLI mode works headless. ---
+veracrypt
 
 # --- NyxOS control layer (built from install/pkgbuild/, see build.sh) ---
 # nyx-thunar-integration, nyx-desktop-sessions and nyx-dashboard are dropped
@@ -75,6 +86,14 @@ nyx-integrity
 nyx-wipe
 nyx-isolation
 nyx-workflow
+nyx-hardening
+nyx-watch
+
+# --- Mandatory access control (AppArmor) — not GUI-dependent. The kernel
+# lsm= boot parameter and the apparmor.service enable-symlink are baked
+# into the shared boot configs/airootfs, so this package must be present
+# here too or that already-enabled service fails to start. ---
+apparmor
 
 # --- Rust toolchain for the control layer ---
 # Still needed even on this profile: the Nyx packages above are built from
@@ -117,6 +136,7 @@ zeek
 # --- Application isolation (backs nyx-isolation) ---
 firejail
 firetools
+podman
 
 # --- Desktop security/privacy apps, wired into Thunar/nyx-wipe/nyx-isolation ---
 keepassxc
@@ -131,3 +151,4 @@ gnupg
 xclip
 ethtool
 usbutils
+secure-delete

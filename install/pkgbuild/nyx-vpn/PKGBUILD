@@ -4,7 +4,7 @@
 pkgname=nyx-vpn
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="NyxOS VPN manager — WireGuard/AmneziaWG/OpenVPN/Xray/Shadowsocks/Hysteria2/SOCKS5 lifecycle with real verification, plus OpenVPN-over-Cloak"
+pkgdesc="NyxOS VPN manager — WireGuard/AmneziaWG/OpenVPN/Xray/Shadowsocks/Hysteria2/SOCKS5/mieru lifecycle with real verification, plus OpenVPN-over-Cloak"
 arch=('x86_64')
 license=('MIT')
 # amneziawg-tools: AUR, awg/awg-quick userspace tools.
@@ -19,6 +19,8 @@ license=('MIT')
 #   dependency, see src/dante.rs's module doc for why.
 # cloak-obfuscation-bin: AUR, prebuilt ck-client/ck-server binaries (see
 #   src/cloak.rs's module doc) — only ck-client is actually driven here.
+# mieru: NyxOS-native (install/pkgbuild/mieru), not on the AUR at all —
+#   prebuilt client binary from upstream's own GitHub Releases.
 depends=(
     'wireguard-tools' 'openvpn' 'iproute2' 'systemd'
     'amneziawg-tools' 'amneziawg-dkms'
@@ -27,6 +29,7 @@ depends=(
     'hysteria-bin'
     'badvpn'
     'cloak-obfuscation-bin'
+    'mieru'
 )
 makedepends=('cargo')
 
@@ -50,7 +53,9 @@ package() {
     "$pkgdir/usr/lib/systemd/system/nyx-vpn-socks5@.service"
   install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn-cloak@.service" \
     "$pkgdir/usr/lib/systemd/system/nyx-vpn-cloak@.service"
+  install -Dm644 "$_repo_root/core/crates/nyx-vpn/packaging/nyx-vpn-mieru@.service" \
+    "$pkgdir/usr/lib/systemd/system/nyx-vpn-mieru@.service"
   # No unit for Shadowsocks: it drives shadowsocks-rust's own upstream
   # shadowsocks-rust@.service template, not one nyx-vpn ships.
-  install -dm755 "$pkgdir/etc/nyx/xray" "$pkgdir/etc/nyx/hysteria" "$pkgdir/etc/nyx/socks5"
+  install -dm755 "$pkgdir/etc/nyx/xray" "$pkgdir/etc/nyx/hysteria" "$pkgdir/etc/nyx/socks5" "$pkgdir/etc/nyx/mieru"
 }

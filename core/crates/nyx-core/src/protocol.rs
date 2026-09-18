@@ -295,6 +295,14 @@ pub enum VpnProtocol {
     /// protocol is never reported fully `Protected` no matter how clean
     /// the route looks — see `handler.rs`.
     Socks5,
+    /// mieru (github.com/enfein/mieru) — an anti-censorship SOCKS5/HTTP/
+    /// HTTPS proxy protocol using XChaCha20-Poly1305 with random padding
+    /// and a client+server replay cache, purpose-built to resist DPI/GFW
+    /// classification. Client binary `mieru`, run via `mieru run` with
+    /// `MIERU_CONFIG_JSON_FILE=<config>.json` under a templated systemd
+    /// unit (`nyx-vpn-mieru@<name>.service`), profiles at
+    /// `/etc/nyx/mieru/<name>.json`.
+    Mieru,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
