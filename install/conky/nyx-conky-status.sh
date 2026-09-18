@@ -44,21 +44,17 @@ fi
 # "wheel", 0660 — readable without a password by the same admin user the
 # dashboard already assumes, no pkexec/root prompt involved). ---
 #
-# Uses `summary` rather than `bundle`: `bundle` writes a gzipped tarball
-# and shells out to journalctl per call, far too heavy for a repeating
-# timer. `summary` is a one-shot in-memory aggregation of every daemon's
-# live status, plus one interfaces/routes dump and one connectivity ping
-# to 1.1.1.1 (2 packets). That ping is the one part of this script that
-# is not a purely local read; it never reveals or displays this machine's
-# IP to anyone (unlike the public-IP case above, it returns no identifying
-# information at all, just packet loss/latency), and is the same kind of
-# background connectivity probe NetworkManager itself already performs
-# periodically on a stock desktop. Its output isn't shown here, and the
-# refresh interval on this exec is intentionally on the slower end
-# (15s, see conky.conf) partly to keep it infrequent.
+# Uses `summary --no-ping` rather than plain `summary`: plain `summary`
+# also fires one outbound connectivity ping to 1.1.1.1 as a side effect,
+# which — however low-stakes — is still automatic, unattended, repeating
+# outbound network traffic this always-on widget has no business sending
+# on its own. `--no-ping` (added specifically for this caller) gives the
+# exact same daemon/interface status with zero packets of its own. Never
+# `bundle`: that writes a gzipped tarball and shells to journalctl per
+# call, far too heavy for a repeating timer.
 summary_json=""
 if [ -x "$NYX_DIAGNOSTICS" ]; then
-    summary_json=$("$NYX_DIAGNOSTICS" summary 2>/dev/null || true)
+    summary_json=$("$NYX_DIAGNOSTICS" summary --no-ping 2>/dev/null || true)
 fi
 
 # Pull the one line belonging to a given daemon out of `summary`'s

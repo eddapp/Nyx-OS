@@ -59,7 +59,13 @@ enum Cmd {
     /// Live status from every Nyx daemon, plus interfaces/routes and a
     /// quick connectivity check. Does NOT fetch the public IP — that's
     /// opt-in only via `public-ip`.
-    Summary,
+    Summary {
+        /// Skip the outbound connectivity ping — for callers (e.g. a
+        /// repeating desktop-widget refresh) that want daemon/interface
+        /// status only, with zero network traffic of their own.
+        #[arg(long)]
+        no_ping: bool,
+    },
     /// Collect a sanitized diagnostics bundle for support/troubleshooting:
     /// the same live daemon statuses `summary` gathers, an
     /// interfaces/routes dump, `uname -a`, and recent systemd/journal
@@ -150,7 +156,7 @@ pub(crate) fn gather_daemon_statuses() -> Vec<(&'static str, String)> {
     ]
 }
 
-fn run_summary() {
+fn run_summary(no_ping: bool) {
     print_daemon_status::<HealthCommand, HealthState>("health", HEALTH_SOCKET, HealthCommand::Status);
     print_daemon_status::<VpnCommand, VpnReport>("vpn", VPN_SOCKET, VpnCommand::Status);
     print_daemon_status::<DnsCommand, DnsReport>("dns", DNS_SOCKET, DnsCommand::Status);
@@ -177,6 +183,10 @@ fn run_summary() {
 
     let dump = checks::network_dump();
     print_local("network", "interfaces and routing table", dump);
+
+    if no_ping {
+        return;
+    }
 
     match checks::ping("1.1.1.1", 2, 2) {
         Ok(result) => {
@@ -241,7 +251,7 @@ fn main() {
                 }
             }
         }
-        Cmd::Summary => run_summary(),
+        Cmd::Summary { no_ping } => run_summary(no_ping),
         Cmd::Bundle { output } => match bundle::collect(output) {
             Ok(outcome) => {
                 let message = format!(
