@@ -57,6 +57,7 @@ pub const MANIFEST_TARGETS: &[&str] = &[
     "/etc/nftables.conf",
     "/etc/tor/torrc",
     "/etc/dnscrypt-proxy/dnscrypt-proxy.toml",
+    "/etc/polkit-1/rules.d/90-nyx-dashboard.rules",
 ];
 
 #[derive(Serialize, Deserialize, Default)]

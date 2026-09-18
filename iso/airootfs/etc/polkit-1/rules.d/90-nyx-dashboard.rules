@@ -1,0 +1,25 @@
+// NyxOS dashboard: matches Kodachi's live-session trust model (no
+// per-action password prompt once logged into the desktop session,
+// confirmed via Kodachi's own docs — its live "kodachi" user already
+// carries sudo rights its dashboard's scripts depend on) for exactly the
+// two real binaries the dashboard invokes via pkexec: nyx-hardening
+// (schedule status/install/remove) and xdg-open (opening a VPN profile's
+// config directory as root). Every other pkexec use in NyxOS — e.g.
+// Thunar's "Open As Root" action — is deliberately left prompting, per
+// its own reasoning in install/thunar/nyx-thunar-root.sh. This rule is
+// scoped to these two program paths only, never a blanket exec grant, and
+// numbered 90 (evaluated after any lower-numbered vendor/default rules)
+// so it's the definitive answer for these two actions.
+polkit.addRule(function(action, subject) {
+    if (action.id != "org.freedesktop.policykit.exec") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var program = action.lookup("program");
+    if (program != "/usr/bin/nyx-hardening" && program != "/usr/bin/xdg-open") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});
