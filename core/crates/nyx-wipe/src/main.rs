@@ -64,6 +64,10 @@ enum TargetArg {
     Thumbnails,
     RecentFiles,
     Logs,
+    FreeSpace,
+    ShredDocuments,
+    ShredDownloads,
+    ShredDesktop,
 }
 
 impl From<TargetArg> for WipeTarget {
@@ -74,10 +78,21 @@ impl From<TargetArg> for WipeTarget {
             TargetArg::Thumbnails => WipeTarget::Thumbnails,
             TargetArg::RecentFiles => WipeTarget::RecentFiles,
             TargetArg::Logs => WipeTarget::Logs,
+            TargetArg::FreeSpace => WipeTarget::FreeSpace,
+            TargetArg::ShredDocuments => WipeTarget::ShredDocuments,
+            TargetArg::ShredDownloads => WipeTarget::ShredDownloads,
+            TargetArg::ShredDesktop => WipeTarget::ShredDesktop,
         }
     }
 }
 
+// Deliberately NOT included: `FreeSpace`, `ShredDocuments`, `ShredDownloads`,
+// `ShredDesktop`. `--all` is used by routine cleanup (and will eventually be
+// what nyx-hardening's scheduler calls unattended) — silently folding a
+// multi-hour free-space wipe and a recursive shred of every user's documents
+// into that would turn a low-risk convenience flag into a high-risk one with
+// no separate opt-in. These four stay reachable only by naming them
+// explicitly.
 const ALL_TARGETS: &[WipeTarget] = &[
     WipeTarget::ShellHistory,
     WipeTarget::Tmp,
@@ -93,6 +108,10 @@ fn target_name(t: WipeTarget) -> &'static str {
         WipeTarget::Thumbnails => "thumbnails",
         WipeTarget::RecentFiles => "recent_files",
         WipeTarget::Logs => "logs",
+        WipeTarget::FreeSpace => "free_space",
+        WipeTarget::ShredDocuments => "shred_documents",
+        WipeTarget::ShredDownloads => "shred_downloads",
+        WipeTarget::ShredDesktop => "shred_desktop",
     }
 }
 
@@ -122,16 +141,20 @@ fn require_something(targets: &[WipeTarget], paths: &[PathBuf]) {
 fn run_plan(targets: Vec<WipeTarget>, paths: Vec<PathBuf>) {
     for target in targets {
         let plan = targets::plan(target);
-        let message = if target == WipeTarget::Logs {
-            "journal disk usage reported in warnings — exact bytes reclaimed are only known \
-             after execute"
-                .to_string()
-        } else {
-            format!(
+        let message = match target {
+            WipeTarget::Logs => "journal disk usage reported in warnings — exact bytes \
+                                  reclaimed are only known after execute"
+                .to_string(),
+            WipeTarget::FreeSpace => {
+                "no discrete file list for a free-space wipe — per-mountpoint free-byte \
+                 estimates reported in warnings"
+                    .to_string()
+            }
+            _ => format!(
                 "{} file(s), {} byte(s) would be removed",
                 plan.files.len(),
                 plan.bytes
-            )
+            ),
         };
         let report = WipeReport {
             target: target_name(target).to_string(),
@@ -177,10 +200,14 @@ fn run_execute(targets: Vec<WipeTarget>, paths: Vec<PathBuf>, yes: bool) {
         let (removed, freed, mut warnings) = targets::execute(target, &plan);
         warnings.extend(plan.warnings);
 
-        let message = if target == WipeTarget::Logs {
-            "journal rotated and vacuumed to the last few seconds".to_string()
-        } else {
-            format!("removed {removed} file(s), freed {freed} byte(s)")
+        let message = match target {
+            WipeTarget::Logs => "journal rotated and vacuumed to the last few seconds".to_string(),
+            WipeTarget::FreeSpace => format!(
+                "free space overwritten with sfill on every target mountpoint; ~{freed} byte(s) \
+                 is an estimate of free space overwritten, not bytes actually freed — see \
+                 warnings for any failures"
+            ),
+            _ => format!("removed {removed} file(s), freed {freed} byte(s)"),
         };
 
         let report = WipeReport {

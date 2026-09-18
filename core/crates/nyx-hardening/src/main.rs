@@ -12,10 +12,12 @@
 
 mod coldboot;
 mod ramwipe;
+mod schedule;
 mod swap;
 
 use clap::{Parser, Subcommand};
 use nyx_core::NyxOutput;
+use schedule::ScheduleTask;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -49,6 +51,48 @@ enum Cmd {
     InstallRamWipeHook,
     /// Remove it.
     RemoveRamWipeHook,
+    /// Recurring-task scheduler, backed by real systemd timers — install,
+    /// remove, or list scheduled runs of one of the tasks explicitly
+    /// vetted as safe to run unattended (bounded `nyx-wipe` categories,
+    /// MAC randomization, screen lock, Tor circuit renewal).
+    Schedule {
+        #[command(subcommand)]
+        command: ScheduleCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCmd {
+    /// Install (or replace) a recurring timer for one task.
+    Install {
+        #[arg(long, value_enum)]
+        task: ScheduleTask,
+        /// How often to run it, in seconds.
+        #[arg(long)]
+        interval_secs: u64,
+        /// Required for, and only meaningful for, `--task randomize-mac`.
+        #[arg(long)]
+        interface: Option<String>,
+    },
+    /// Disable and remove a task's timer.
+    Remove {
+        #[arg(long, value_enum)]
+        task: ScheduleTask,
+    },
+    /// List every known task id, whether it's installed/enabled, and its
+    /// configured interval — read live from the installed unit files.
+    Status,
+    /// Internal: what the generated service units' `ExecStart=` actually
+    /// runs for the two daemon-backed tasks (`randomize-mac`,
+    /// `renew-tor-circuit`) — sends the real command to the owning
+    /// daemon's socket. Not meant to be run by hand, but not privileged
+    /// beyond what `nyx-hardening` already requires.
+    Exec {
+        #[arg(value_enum)]
+        task: ScheduleTask,
+        #[arg(long)]
+        interface: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -139,6 +183,52 @@ fn main() {
                 NyxOutput::ok("nyx-hardening", "remove-ram-wipe-hook", message, Some(removed)).print();
             }
             Err(e) => exit_with_error("remove-ram-wipe-hook", &e.to_string()),
+        },
+        Cmd::Schedule { command } => run_schedule(command),
+    }
+}
+
+fn run_schedule(command: ScheduleCmd) {
+    match command {
+        ScheduleCmd::Install { task, interval_secs, interface } => {
+            match schedule::install(task, interval_secs, interface.as_deref()) {
+                Ok(()) => {
+                    let message = format!(
+                        "installed and {} nyx-schedule-{} (every {interval_secs}s)",
+                        if task.is_user_scope() {
+                            "enabled --global (takes effect on next graphical login)"
+                        } else {
+                            "enabled --now"
+                        },
+                        task.id(),
+                    );
+                    NyxOutput::<()>::ok("nyx-hardening", "schedule install", message, None).print();
+                }
+                Err(e) => exit_with_error("schedule install", &e.to_string()),
+            }
+        }
+        ScheduleCmd::Remove { task } => match schedule::remove(task) {
+            Ok(removed) => {
+                let message = if removed {
+                    format!("disabled and removed nyx-schedule-{}", task.id())
+                } else {
+                    format!("nyx-schedule-{} was not installed -- nothing to remove", task.id())
+                };
+                NyxOutput::ok("nyx-hardening", "schedule remove", message, Some(removed)).print();
+            }
+            Err(e) => exit_with_error("schedule remove", &e.to_string()),
+        },
+        ScheduleCmd::Status => {
+            let report = schedule::status();
+            let installed = report.iter().filter(|t| t.installed).count();
+            let message = format!("{installed}/{} scheduled task(s) installed", report.len());
+            NyxOutput::ok("nyx-hardening", "schedule status", message, Some(report)).print();
+        }
+        ScheduleCmd::Exec { task, interface } => match schedule::exec(task, interface.as_deref()) {
+            Ok(message) => {
+                NyxOutput::<()>::ok("nyx-hardening", "schedule exec", message, None).print();
+            }
+            Err(e) => exit_with_error("schedule exec", &e),
         },
     }
 }

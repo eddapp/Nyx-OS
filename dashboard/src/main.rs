@@ -1,6 +1,8 @@
 mod client;
 mod diagnostics;
+mod schedule;
 mod ui;
+mod workflow;
 
 use gtk::glib;
 use gtk::prelude::*;

@@ -124,6 +124,188 @@ fn recent_files_candidates() -> Vec<PathBuf> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Free-space wipe — `sfill` (secure-delete package) overwriting unused
+// blocks/inodes on a mountpoint. Slow by nature: it writes until the target
+// filesystem is full, then removes what it wrote. There is no discrete file
+// list here, so unlike every other target, `plan()`/`execute()` report an
+// estimate (current free bytes) rather than an exact figure.
+// ---------------------------------------------------------------------------
+
+/// Resolves the mountpoint that actually backs `path` (e.g. `/home` may
+/// live on the same filesystem as `/`, in which case both resolve to the
+/// same target) — real semantics via `findmnt -T`, never assumed.
+fn mountpoint_for(path: &Path) -> Option<PathBuf> {
+    let path = path.to_str()?;
+    let output = Command::new("findmnt")
+        .args(["-T", path, "-no", "TARGET"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let target = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if target.is_empty() { None } else { Some(PathBuf::from(target)) }
+}
+
+/// The distinct mountpoints free-space wipe should target: `/` and `/home`,
+/// deduplicated to whatever filesystems they actually resolve to — a single
+/// combined `/` on a one-partition layout, or two separate passes if `/home`
+/// is its own mount.
+fn free_space_mountpoints() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for candidate in ["/", "/home"] {
+        if let Some(mp) = mountpoint_for(Path::new(candidate))
+            && !out.contains(&mp)
+        {
+            out.push(mp);
+        }
+    }
+    if out.is_empty() {
+        out.push(PathBuf::from("/"));
+    }
+    out
+}
+
+/// Current free bytes on the filesystem backing `path`, as an upper-bound
+/// estimate of what `sfill` will write and then remove — not a promise,
+/// since free space can shrink or grow between `plan()` and `execute()`.
+fn free_bytes(path: &Path) -> Option<u64> {
+    let stat = nix::sys::statvfs::statvfs(path).ok()?;
+    Some(stat.blocks_available() * stat.fragment_size())
+}
+
+/// Runs `sfill -v` against every mountpoint free-space wipe targets. No
+/// `-f`/`-l`: those trade away security for speed (`-f` skips
+/// `/dev/urandom` and the sync-after-write step; `-l` drops sfill's default
+/// multi-pass Gutmann-style overwrite down to two passes, or one with a
+/// second `-l`) and this is meant to actually resist forensic recovery, not
+/// just look like it did — same "prefer full security" call
+/// `nyx-browsers::secure_delete_dir` already makes for `srm`. `-v` only adds
+/// progress logging; it changes nothing about what gets overwritten.
+fn execute_free_space() -> (usize, u64, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut bytes_estimate = 0u64;
+
+    for mountpoint in free_space_mountpoints() {
+        let before = free_bytes(&mountpoint);
+        match Command::new("sfill").arg("-v").arg(&mountpoint).status() {
+            Ok(s) if s.success() => {
+                if let Some(b) = before {
+                    bytes_estimate += b;
+                }
+            }
+            Ok(s) => warnings.push(format!(
+                "{}: 'sfill -v' exited with {s}",
+                mountpoint.display()
+            )),
+            Err(e) => warnings.push(format!(
+                "{}: failed to run 'sfill': {e}",
+                mountpoint.display()
+            )),
+        }
+    }
+
+    (0, bytes_estimate, warnings)
+}
+
+// ---------------------------------------------------------------------------
+// Folder-shred targets — bounded to three fixed, well-known folder names
+// (never an arbitrary caller-supplied path) for every real local account.
+// Contents are securely deleted with `srm -r`; the folder itself is kept so
+// the account has somewhere to put new files immediately after.
+// ---------------------------------------------------------------------------
+
+/// Recursively lists every regular file under `dir`. Symlinks are neither
+/// followed nor counted here — `srm -r` will remove the link entry itself
+/// without touching whatever it points to, so counting the *target's* bytes
+/// would misreport what this walk is actually about to destroy.
+fn walk_regular_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        if meta.is_dir() {
+            walk_regular_files(&path, out);
+        } else if meta.is_file() {
+            out.push(path);
+        }
+    }
+}
+
+/// Every real file under `<home>/<folder>` for every real local account —
+/// the honest, walked file/byte count `plan()` reports for a folder-shred
+/// target, matching the same honesty `tmp_candidates()` already provides.
+fn shred_folder_candidates(folder: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for account in users::accounts() {
+        let dir = account.home.join(folder);
+        if dir.is_dir() {
+            tracing::debug!(
+                "shred_{folder}: scanning {} ({})",
+                account.name,
+                dir.display()
+            );
+            walk_regular_files(&dir, &mut out);
+        }
+    }
+    out
+}
+
+/// Immediate children of `<home>/<folder>` for every real local account —
+/// what `execute()` actually hands to `srm -r`, one invocation per entry, so
+/// the folder itself is never passed to `srm` and never removed.
+fn shred_folder_top_level_entries(folder: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for account in users::accounts() {
+        let dir = account.home.join(folder);
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        out.extend(entries.flatten().map(|e| e.path()));
+    }
+    out
+}
+
+/// Securely deletes every entry directly inside `<home>/<folder>` (for every
+/// real local account) with `srm -r`, leaving the folder itself behind. No
+/// `-f`: same full-security default as [`execute_free_space`] and
+/// `nyx-browsers::secure_delete_dir`.
+fn execute_shred_folder(folder: &str) -> (usize, u64, Vec<String>) {
+    let mut warnings = Vec::new();
+    let mut removed = 0usize;
+    let mut freed = 0u64;
+
+    for path in shred_folder_top_level_entries(folder) {
+        let Ok(meta) = fs::symlink_metadata(&path) else { continue };
+        let (count, size) = if meta.file_type().is_symlink() {
+            (1, meta.len())
+        } else if meta.is_dir() {
+            let mut nested = Vec::new();
+            walk_regular_files(&path, &mut nested);
+            let size = nested.iter().map(|p| file_size(p)).sum();
+            (nested.len().max(1), size)
+        } else {
+            (1, meta.len())
+        };
+
+        match Command::new("srm").args(["-r"]).arg(&path).status() {
+            Ok(s) if s.success() => {
+                removed += count;
+                freed += size;
+            }
+            Ok(s) => warnings.push(format!("{}: 'srm -r' exited with {s}", path.display())),
+            Err(e) => warnings.push(format!(
+                "{}: failed to run 'srm': {e}",
+                path.display()
+            )),
+        }
+    }
+
+    (removed, freed, warnings)
+}
+
 /// True if any block device on this system is rotational-storage-free, i.e.
 /// an SSD/NVMe where overwriting file *contents* is not a reliable erasure
 /// guarantee (wear-levelling and the flash translation layer can retain the
@@ -292,6 +474,41 @@ pub fn plan(target: WipeTarget) -> Plan {
         }
         WipeTarget::Thumbnails => thumbnail_candidates(),
         WipeTarget::RecentFiles => recent_files_candidates(),
+        WipeTarget::FreeSpace => {
+            ssd_caveat(&mut warnings);
+            warnings.push(
+                "wiping free space is slow by nature — sfill writes files until each target \
+                 filesystem is full, then removes them; this can take a long time on large or \
+                 mostly-empty filesystems"
+                    .to_string(),
+            );
+            for mountpoint in free_space_mountpoints() {
+                match free_bytes(&mountpoint) {
+                    Some(bytes) => warnings.push(format!(
+                        "{}: approximately {bytes} byte(s) of free space would be overwritten \
+                         (estimate only — free space can change before execute runs)",
+                        mountpoint.display()
+                    )),
+                    None => warnings.push(format!(
+                        "{}: could not determine free space",
+                        mountpoint.display()
+                    )),
+                }
+            }
+            Vec::new()
+        }
+        WipeTarget::ShredDocuments => {
+            ssd_caveat(&mut warnings);
+            shred_folder_candidates("Documents")
+        }
+        WipeTarget::ShredDownloads => {
+            ssd_caveat(&mut warnings);
+            shred_folder_candidates("Downloads")
+        }
+        WipeTarget::ShredDesktop => {
+            ssd_caveat(&mut warnings);
+            shred_folder_candidates("Desktop")
+        }
         WipeTarget::Logs => {
             // journalctl owns its own storage; we can't list "files" without
             // reimplementing its rotation logic, so plan just reports current
@@ -316,6 +533,14 @@ pub fn plan(target: WipeTarget) -> Plan {
 /// Actually delete what `plan()` found. Returns (files removed, bytes freed,
 /// extra warnings for entries that couldn't be removed).
 pub fn execute(target: WipeTarget, plan: &Plan) -> (usize, u64, Vec<String>) {
+    match target {
+        WipeTarget::FreeSpace => return execute_free_space(),
+        WipeTarget::ShredDocuments => return execute_shred_folder("Documents"),
+        WipeTarget::ShredDownloads => return execute_shred_folder("Downloads"),
+        WipeTarget::ShredDesktop => return execute_shred_folder("Desktop"),
+        _ => {}
+    }
+
     let mut removed = 0usize;
     let mut freed = 0u64;
     let mut warnings = Vec::new();

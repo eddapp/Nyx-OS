@@ -9,7 +9,7 @@ pub use error::{NyxError, NyxResult};
 pub use output::{NyxOutput, Status};
 pub use protocol::{
     CpuTelemetry, DeviceModule, DeviceRadio, DevicesCommand, DevicesReport, DiskTelemetry,
-    DnsCommand, DnsReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
+    DnsCommand, DnsProvider, DnsReport, HealthCommand, HealthState, IdentityCommand, IdentityReport,
     IntegrityCommand, IntegrityReport, InterfaceIdentity, KillSwitchLevel,
     MemoryTelemetry, NetworkInterfaceTelemetry, SecurityState, SocksProxyAddr, TelemetryCommand,
     TelemetryReport, Toggle, VpnCommand, VpnProfile, VpnProtocol, VpnReport, WipeReport, WipeTarget,

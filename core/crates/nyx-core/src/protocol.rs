@@ -125,6 +125,34 @@ pub enum DnsCommand {
     /// Return the last computed report (computed fresh — checks here are
     /// cheap: file reads, /proc scans, one loopback query).
     Status,
+    /// List nyx-dns's curated set of switchable DNS providers, plus which
+    /// one(s) are currently active — read live from the deployed
+    /// dnscrypt-proxy config's `server_names` line, not from the curated
+    /// list itself.
+    ListProviders,
+    /// Switch dnscrypt-proxy to the named curated provider: rewrite the
+    /// deployed config's `server_names` line to that provider's stamp
+    /// name, restart `dnscrypt-proxy.service`, then verify a live query
+    /// still resolves. `provider` must be one of the ids `ListProviders`
+    /// returns — an arbitrary caller-supplied stamp name is rejected, so
+    /// this can't be used to point NyxOS at an unverified resolver. On a
+    /// failed verification query, the previous `server_names` line is
+    /// restored and the service restarted again rather than leaving DNS
+    /// broken.
+    SwitchProvider { provider: String },
+}
+
+/// One entry in nyx-dns's curated list of switchable DNS providers. The
+/// actual dnscrypt-proxy stamp name each id maps to is internal to
+/// nyx-dns and never crosses the wire — callers only ever see and pass
+/// back the id.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Default)]
+pub struct DnsProvider {
+    pub id: String,
+    pub display_name: String,
+    /// True if this provider's stamp name is present in the deployed
+    /// dnscrypt-proxy config's `server_names` line right now.
+    pub active: bool,
 }
 
 /// Result of actually checking the DNS path, not just "is a process running".
@@ -144,6 +172,11 @@ pub struct DnsReport {
     pub foreign_listener_on_53: bool,
     pub state: SecurityState,
     pub detail: String,
+    /// Only populated in response to `DnsCommand::ListProviders`; empty
+    /// otherwise. Kept on this one report type rather than a separate
+    /// response shape so every `DnsCommand` can share the same
+    /// `NyxOutput<DnsReport>` wire type.
+    pub providers: Vec<DnsProvider>,
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +231,20 @@ pub enum WipeTarget {
     RecentFiles,
     /// Rotate/vacuum the systemd journal down to nothing older than now.
     Logs,
+    /// Overwrite unused disk blocks and inodes on `/` and `/home` (whichever
+    /// mountpoints those actually resolve to) with `sfill`. Slow by nature —
+    /// it writes until the target filesystem is full, then removes what it
+    /// wrote.
+    FreeSpace,
+    /// Securely delete the *contents* of `~/Documents` (folder itself kept)
+    /// for every real local account.
+    ShredDocuments,
+    /// Securely delete the *contents* of `~/Downloads` (folder itself kept)
+    /// for every real local account.
+    ShredDownloads,
+    /// Securely delete the *contents* of `~/Desktop` (folder itself kept)
+    /// for every real local account.
+    ShredDesktop,
 }
 
 // ---------------------------------------------------------------------------

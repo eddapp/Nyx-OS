@@ -1,13 +1,16 @@
 use crate::client;
 use crate::diagnostics::{self, DefaultRoute, PublicIpResult};
+use crate::schedule;
+use crate::workflow;
 use gtk::glib;
 use gtk::prelude::*;
 use nyx_core::{
     DevicesCommand, DevicesReport, DnsCommand, DnsReport, HealthCommand, HealthState,
-    IdentityCommand, IdentityReport, KillSwitchLevel, NyxOutput, SecurityState, TelemetryCommand,
-    TelemetryReport, Toggle, VpnCommand, VpnProtocol, VpnReport,
+    IdentityCommand, IdentityReport, IntegrityCommand, IntegrityReport, KillSwitchLevel,
+    NyxOutput, SecurityState, SocksProxyAddr, TelemetryCommand, TelemetryReport, Toggle,
+    VpnCommand, VpnProtocol, VpnReport,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
@@ -17,8 +20,124 @@ type IdentityApplyFn = Rc<dyn Fn(Result<NyxOutput<IdentityReport>, String>)>;
 type DevicesApplyFn = Rc<dyn Fn(Result<NyxOutput<DevicesReport>, String>)>;
 type TelemetryApplyFn = Rc<dyn Fn(Result<NyxOutput<TelemetryReport>, String>)>;
 type DnsApplyFn = Rc<dyn Fn(Result<NyxOutput<DnsReport>, String>)>;
+type IntegrityApplyFn = Rc<dyn Fn(Result<NyxOutput<IntegrityReport>, String>)>;
 type DefaultRouteApplyFn = Rc<dyn Fn(Result<DefaultRoute, String>)>;
 type PublicIpApplyFn = Rc<dyn Fn(Result<PublicIpResult, String>)>;
+type PostureListApplyFn = Rc<dyn Fn(Result<Vec<workflow::WorkflowListEntry>, String>)>;
+type PostureApplyFn = Rc<dyn Fn(Result<workflow::WorkflowReport, String>)>;
+type ScheduleStatusApplyFn = Rc<dyn Fn(Result<Vec<schedule::TaskStatus>, String>)>;
+type ScheduleActionResults = Vec<(String, Result<String, String>)>;
+type ScheduleActionsApplyFn = Rc<dyn Fn(Result<ScheduleActionResults, String>)>;
+
+/// Every VPN backend `nyx-vpn` actually implements (see
+/// `nyx_core::protocol::VpnProtocol`), in the order the Network tab's
+/// protocol dropdown lists them.
+const VPN_PROTOCOLS: &[(VpnProtocol, &str)] = &[
+    (VpnProtocol::WireGuard, "WireGuard"),
+    (VpnProtocol::OpenVpn, "OpenVPN"),
+    (VpnProtocol::AmneziaWg, "AmneziaWG"),
+    (VpnProtocol::Xray, "Xray"),
+    (VpnProtocol::Shadowsocks, "Shadowsocks"),
+    (VpnProtocol::Hysteria2, "Hysteria2"),
+    (VpnProtocol::Socks5, "SOCKS5"),
+];
+
+/// Tor's SocksPort only carries TCP, so only the three backends that dial
+/// their own upstream connection over an ordinary TCP SOCKS proxy can be
+/// chained through it — see `nyx_core::VpnCommand::ConnectViaSocksProxy`'s
+/// doc comment for exactly why WireGuard/AmneziaWG (UDP in-kernel tunnels),
+/// Hysteria2 (QUIC/UDP), and SOCKS5 (single upstream-proxy slot, no
+/// chaining flag) are rejected outright by nyx-vpn itself, not just hidden
+/// here.
+fn protocol_supports_tor_chaining(protocol: VpnProtocol) -> bool {
+    matches!(protocol, VpnProtocol::OpenVpn | VpnProtocol::Xray | VpnProtocol::Shadowsocks)
+}
+
+/// Each backend's real, on-disk profile directory — see the `PROFILE_DIR`
+/// constant in the matching `nyx-vpn` backend module. These are root-only
+/// directories the dashboard cannot read directly (confirmed on this very
+/// sandbox); the only honest way to show them is quoting the real path
+/// and, for browsing, going through `nyx-vpn`'s own `VpnCommand::List` or a
+/// root-privileged file manager.
+fn profile_dir(protocol: VpnProtocol) -> &'static str {
+    match protocol {
+        VpnProtocol::WireGuard => "/etc/wireguard",
+        VpnProtocol::OpenVpn => "/etc/openvpn/client",
+        VpnProtocol::AmneziaWg => "/etc/amnezia/amneziawg",
+        VpnProtocol::Xray => "/etc/nyx/xray",
+        VpnProtocol::Shadowsocks => "/etc/shadowsocks-rust",
+        VpnProtocol::Hysteria2 => "/etc/nyx/hysteria",
+        VpnProtocol::Socks5 => "/etc/nyx/socks5",
+    }
+}
+
+struct PeriodicTask {
+    id: &'static str,
+    label: &'static str,
+    dangerous: bool,
+    needs_interface: bool,
+}
+
+/// The 12 task ids from `nyx-hardening`'s `ScheduleTask::ALL` (see
+/// `core/crates/nyx-hardening/src/schedule/mod.rs`). Labels/dangerous-flag
+/// are hardcoded here rather than fetched from the CLI because
+/// `TaskStatus` (the JSON `schedule status` actually returns) carries only
+/// `task`/`scope`/`installed`/`enabled`/`interval_secs` — no human
+/// description field to reuse.
+const PERIODIC_TASKS: &[PeriodicTask] = &[
+    PeriodicTask { id: "wipe-shell-history", label: "Wipe shell history", dangerous: false, needs_interface: false },
+    PeriodicTask { id: "wipe-tmp", label: "Wipe /tmp", dangerous: false, needs_interface: false },
+    PeriodicTask {
+        id: "wipe-thumbnails",
+        label: "Wipe thumbnail cache",
+        dangerous: false,
+        needs_interface: false,
+    },
+    PeriodicTask {
+        id: "wipe-recent-files",
+        label: "Wipe recent-files lists",
+        dangerous: false,
+        needs_interface: false,
+    },
+    PeriodicTask { id: "wipe-logs", label: "Wipe/vacuum logs", dangerous: false, needs_interface: false },
+    PeriodicTask {
+        id: "wipe-free-space",
+        label: "Wipe free disk space (sfill) — slow, can take hours",
+        dangerous: true,
+        needs_interface: false,
+    },
+    PeriodicTask {
+        id: "shred-documents",
+        label: "Shred every user's Documents folder — irreversible",
+        dangerous: true,
+        needs_interface: false,
+    },
+    PeriodicTask {
+        id: "shred-downloads",
+        label: "Shred every user's Downloads folder — irreversible",
+        dangerous: true,
+        needs_interface: false,
+    },
+    PeriodicTask {
+        id: "shred-desktop",
+        label: "Shred every user's Desktop folder — irreversible",
+        dangerous: true,
+        needs_interface: false,
+    },
+    PeriodicTask {
+        id: "randomize-mac",
+        label: "Randomize MAC address",
+        dangerous: false,
+        needs_interface: true,
+    },
+    PeriodicTask { id: "lock-screen", label: "Lock screen", dangerous: false, needs_interface: false },
+    PeriodicTask {
+        id: "renew-tor-circuit",
+        label: "Renew Tor circuit",
+        dangerous: false,
+        needs_interface: false,
+    },
+];
 
 /// Human-readable byte size, `1.0` == 1024 of the previous unit.
 fn format_bytes(bytes: f64) -> String {
@@ -80,6 +199,34 @@ fn section_heading(text: &str) -> gtk::Label {
     label.set_halign(gtk::Align::Start);
     label.set_margin_top(6);
     label
+}
+
+/// Vertical box with the same margins every tab's root content box uses,
+/// so switching a section between tabs never has to think about spacing.
+fn new_tab_box() -> gtk::Box {
+    let box_ = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    box_.set_margin_top(16);
+    box_.set_margin_bottom(16);
+    box_.set_margin_start(16);
+    box_.set_margin_end(16);
+    box_
+}
+
+/// Wraps a tab's content box in its own scroller — each tab scrolls
+/// independently rather than the whole notebook, which matters once a
+/// long tab (Devices, Hardening) and a short one (Browsers) share the same
+/// window height.
+fn wrap_scrolled(content: &gtk::Box) -> gtk::ScrolledWindow {
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_child(Some(content));
+    scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
+    scroller.set_vexpand(true);
+    scroller
+}
+
+fn append_tab(notebook: &gtk::Notebook, title: &str, content: &gtk::Box) {
+    let scroller = wrap_scrolled(content);
+    notebook.append_page(&scroller, Some(&gtk::Label::new(Some(title))));
 }
 
 fn set_dot(dot: &gtk::Box, on: bool) {
@@ -196,6 +343,10 @@ fn run_dns_command(cmd: DnsCommand, apply: DnsApplyFn) {
     run_on_background(cmd, client::send_dns, apply);
 }
 
+fn run_integrity_command(cmd: IntegrityCommand, apply: IntegrityApplyFn) {
+    run_on_background(cmd, client::send_integrity, apply);
+}
+
 /// Unprivileged, purely local (`ip route show`) — safe to refresh on the
 /// same timer as the rest of the dashboard, unlike the public-IP check.
 fn run_default_route_command(apply: DefaultRouteApplyFn) {
@@ -209,19 +360,83 @@ fn run_public_ip_command(apply: PublicIpApplyFn) {
     run_on_background((), |_| diagnostics::fetch_public_ip(), apply);
 }
 
+/// Fetches the three posture ids/descriptions once, when the Hardening tab
+/// is built — not on the periodic refresh timer, since this text is static
+/// for the lifetime of the running `nyx-workflow` binary.
+fn run_posture_list_command(apply: PostureListApplyFn) {
+    run_on_background((), |_| workflow::fetch_postures(), apply);
+}
+
+/// Runs `nyx-workflow posture --level <level> --apply --json` in the
+/// background — only from the Hardening tab's "Apply" button, after the
+/// operator has confirmed the posture they picked.
+fn run_posture_apply_command(level: String, apply: PostureApplyFn) {
+    run_on_background((), move |()| workflow::apply_posture(&level), apply);
+}
+
+/// Runs `pkexec nyx-hardening schedule status` in the background — once
+/// when the Periodic Tasks tab is built, and again after every
+/// install/remove batch to reflect the real on-disk result. Every call
+/// pops its own polkit prompt, per `schedule.rs`'s module doc: unlike
+/// `nyx-workflow`, `nyx-hardening` refuses to run at all as non-root, so
+/// even this read needs `pkexec`.
+fn run_schedule_status_command(apply: ScheduleStatusApplyFn) {
+    run_on_background((), |_| schedule::status(), apply);
+}
+
+/// Runs a batch of `pkexec nyx-hardening schedule install|remove` calls in
+/// the background, one per checked/unchecked task — only from the
+/// Periodic Tasks tab's "Activate Timer" button, after any dangerous-task
+/// confirmation has been accepted.
+fn run_schedule_actions_command(actions: Vec<schedule::ScheduleAction>, apply: ScheduleActionsApplyFn) {
+    run_on_background(actions, |actions| Ok(schedule::run_actions(actions)), apply);
+}
+
+/// Spawns one of the four `nyx-browsers` launcher binaries detached —
+/// never `.wait()`s on it. Each launcher manages its own lifetime
+/// (including, for the disposable one, securely erasing its own profile on
+/// exit) with no dashboard involvement, so the dashboard's only job is to
+/// start it and immediately let go.
+fn spawn_browser(binary: &str) -> Result<(), String> {
+    std::process::Command::new(binary).spawn().map(|_child| ()).map_err(|e| format!("{binary}: {e}"))
+}
+
+/// Opens a VPN backend's real, root-only profile directory in a
+/// root-privileged file manager window via `pkexec` + the desktop's own
+/// `xdg-open` — the same `pkexec env DISPLAY=... XAUTHORITY=...` shape
+/// `install/thunar/nyx-thunar-root.sh`'s "NyxOS Open As Root" action
+/// already uses elsewhere in this project. Spawned detached, never
+/// `.wait()`ed on, exactly like `spawn_browser` above: the dashboard's job
+/// is to start it and let go, not to babysit a file manager window.
+fn spawn_show_config_dir(dir: &str) -> Result<(), String> {
+    let display = std::env::var("DISPLAY").unwrap_or_default();
+    let xauthority = std::env::var("XAUTHORITY").unwrap_or_else(|_| {
+        format!("{}/.Xauthority", std::env::var("HOME").unwrap_or_default())
+    });
+    std::process::Command::new("pkexec")
+        .arg("env")
+        .arg(format!("DISPLAY={display}"))
+        .arg(format!("XAUTHORITY={xauthority}"))
+        .arg("xdg-open")
+        .arg(dir)
+        .spawn()
+        .map(|_child| ())
+        .map_err(|e| format!("{dir}: {e}"))
+}
+
 pub fn build(app: &gtk::Application) {
     load_css();
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("NyxOS Control")
-        .default_width(440)
-        .default_height(640)
+        .default_width(480)
+        .default_height(680)
         .build();
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
     root.set_margin_top(16);
-    root.set_margin_bottom(16);
+    root.set_margin_bottom(6);
     root.set_margin_start(16);
     root.set_margin_end(16);
 
@@ -230,116 +445,301 @@ pub fn build(app: &gtk::Application) {
     heading.set_halign(gtk::Align::Start);
     root.append(&heading);
 
-    // --- Network health: Tor, kill switch, panic --------------------------
+    // A compact, always-visible status strip — unlike every value below,
+    // which is buried inside whichever tab owns it, these four read only
+    // from calls the tabs beneath them already make on the same 5s timer
+    // (see the timer closure further down): no second socket/subprocess
+    // call is issued just for this header.
+    let header_grid = gtk::Grid::new();
+    header_grid.set_column_spacing(18);
+    header_grid.set_row_spacing(2);
+    header_grid.set_margin_top(4);
+    header_grid.set_margin_bottom(4);
+
+    let (header_vpn_row, header_vpn_dot, header_vpn_label) = status_row("VPN");
+    let (header_tor_row, header_tor_dot, header_tor_label) = status_row("Tor");
+    let (header_dns_row, header_dns_dot, header_dns_label) = status_row("DNS");
+    let header_route_label = gtk::Label::new(Some("Route: unknown"));
+    header_route_label.set_halign(gtk::Align::Start);
+
+    header_grid.attach(&header_vpn_row, 0, 0, 1, 1);
+    header_grid.attach(&header_tor_row, 1, 0, 1, 1);
+    header_grid.attach(&header_route_label, 2, 0, 1, 1);
+    header_grid.attach(&header_dns_row, 3, 0, 1, 1);
+    root.append(&header_grid);
+    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    let notebook = gtk::Notebook::new();
+    notebook.set_vexpand(true);
+    root.append(&notebook);
+
+    let status_label = gtk::Label::new(Some("connecting to nyx-health…"));
+    status_label.set_wrap(true);
+    status_label.set_halign(gtk::Align::Start);
+    status_label.set_margin_top(6);
+    root.append(&status_label);
+
+    window.set_child(Some(&root));
+    window.present();
+
+    // =======================================================================
+    // Network tab: Tor, VPN (all backends + Connect-via-Tor), Connection Info
+    // =======================================================================
+    let network_tab = new_tab_box();
+
     let (tor_row, tor_dot, tor_label) = status_row("Tor");
-    let (ks_row, ks_dot, ks_label) = status_row("Kill Switch");
-    let (panic_row, panic_dot, panic_label) = status_row("Panic Mode");
-    root.append(&tor_row);
-    root.append(&ks_row);
-    root.append(&panic_row);
-
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
+    network_tab.append(&tor_row);
     let tor_btn = gtk::Button::with_label("Toggle Tor");
-    root.append(&tor_btn);
+    network_tab.append(&tor_btn);
 
-    let ks_heading = gtk::Label::new(Some("Kill switch level"));
-    ks_heading.set_halign(gtk::Align::Start);
-    root.append(&ks_heading);
+    network_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    network_tab.append(&section_heading("VPN"));
 
-    let ks_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let ks_off_btn = gtk::Button::with_label("Off");
-    let ks_soft_btn = gtk::Button::with_label("Soft");
-    let ks_medium_btn = gtk::Button::with_label("Medium");
-    let ks_armed_btn = gtk::Button::with_label("Armed");
-    ks_buttons.append(&ks_off_btn);
-    ks_buttons.append(&ks_soft_btn);
-    ks_buttons.append(&ks_medium_btn);
-    ks_buttons.append(&ks_armed_btn);
-    root.append(&ks_buttons);
-
-    let panic_btn = gtk::Button::with_label("PANIC — lock down network");
-    panic_btn.add_css_class("destructive-action");
-    root.append(&panic_btn);
-
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-
-    // --- VPN -----------------------------------------------------------
     let (vpn_row, vpn_dot, vpn_label) = status_row("VPN");
-    root.append(&vpn_row);
+    network_tab.append(&vpn_row);
 
     let vpn_detail_label = gtk::Label::new(None);
     vpn_detail_label.set_wrap(true);
     vpn_detail_label.set_halign(gtk::Align::Start);
-    root.append(&vpn_detail_label);
+    network_tab.append(&vpn_detail_label);
 
-    let vpn_protocol_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-    let vpn_wg_btn = gtk::Button::with_label("WireGuard");
-    let vpn_ovpn_btn = gtk::Button::with_label("OpenVPN");
-    vpn_wg_btn.add_css_class("selected");
-    vpn_protocol_row.append(&vpn_wg_btn);
-    vpn_protocol_row.append(&vpn_ovpn_btn);
-    root.append(&vpn_protocol_row);
+    let protocol_labels: Vec<&str> = VPN_PROTOCOLS.iter().map(|(_, label)| *label).collect();
+    let vpn_protocol_dropdown = gtk::DropDown::from_strings(&protocol_labels);
+    vpn_protocol_dropdown.set_selected(0);
+    network_tab.append(&vpn_protocol_dropdown);
 
-    let vpn_profile_entry = gtk::Entry::new();
-    vpn_profile_entry.set_placeholder_text(Some("profile name (e.g. /etc/wireguard/<name>.conf)"));
-    root.append(&vpn_profile_entry);
+    let vpn_profile_dropdown = gtk::DropDown::from_strings(&[]);
+    network_tab.append(&vpn_profile_dropdown);
+
+    let vpn_profile_empty_label = gtk::Label::new(Some("loading profiles…"));
+    vpn_profile_empty_label.set_wrap(true);
+    vpn_profile_empty_label.set_halign(gtk::Align::Start);
+    vpn_profile_empty_label.set_visible(false);
+    network_tab.append(&vpn_profile_empty_label);
+
+    let vpn_profile_dir_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let vpn_show_config_dir_btn = gtk::Button::with_label("Show config directory");
+    vpn_profile_dir_row.append(&vpn_show_config_dir_btn);
+    network_tab.append(&vpn_profile_dir_row);
+
+    let vpn_profile_status_label = gtk::Label::new(None);
+    vpn_profile_status_label.set_wrap(true);
+    vpn_profile_status_label.set_halign(gtk::Align::Start);
+    network_tab.append(&vpn_profile_status_label);
+
+    // Real profile names for whichever protocol is currently selected, in
+    // the same order as `vpn_profile_dropdown`'s model — `VpnCommand::List`
+    // is the only source of truth here; the dashboard never guesses a name
+    // or reads `/etc/wireguard` (or any other backend's profile dir)
+    // itself, since these are root-only directories it cannot see into.
+    let vpn_profiles_state: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+
+    fn refresh_vpn_profiles(
+        protocol: VpnProtocol,
+        protocol_label: &'static str,
+        dropdown: gtk::DropDown,
+        empty_label: gtk::Label,
+        profiles_state: Rc<RefCell<Vec<String>>>,
+    ) {
+        let apply: VpnApplyFn = Rc::new(move |result| match result {
+            Ok(out) => {
+                let names: Vec<String> = out
+                    .data
+                    .map(|report| {
+                        report
+                            .profiles
+                            .into_iter()
+                            .filter(|p| p.protocol == protocol)
+                            .map(|p| p.name)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if names.is_empty() {
+                    dropdown.set_model(gtk::gio::ListModel::NONE);
+                    dropdown.set_visible(false);
+                    empty_label.set_label(&format!(
+                        "no profiles found for {protocol_label} — add one at {}",
+                        profile_dir(protocol)
+                    ));
+                    empty_label.set_visible(true);
+                } else {
+                    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+                    dropdown.set_model(Some(&gtk::StringList::new(&refs)));
+                    dropdown.set_selected(0);
+                    dropdown.set_visible(true);
+                    empty_label.set_visible(false);
+                }
+                *profiles_state.borrow_mut() = names;
+            }
+            Err(e) => {
+                dropdown.set_model(gtk::gio::ListModel::NONE);
+                dropdown.set_visible(false);
+                empty_label.set_label(&format!("could not list {protocol_label} profiles: {e}"));
+                empty_label.set_visible(true);
+            }
+        });
+        run_vpn_command(VpnCommand::List, apply);
+    }
+
+    refresh_vpn_profiles(
+        VPN_PROTOCOLS[0].0,
+        VPN_PROTOCOLS[0].1,
+        vpn_profile_dropdown.clone(),
+        vpn_profile_empty_label.clone(),
+        Rc::clone(&vpn_profiles_state),
+    );
+
+    vpn_show_config_dir_btn.connect_clicked({
+        let vpn_protocol_dropdown = vpn_protocol_dropdown.clone();
+        let vpn_profile_status_label = vpn_profile_status_label.clone();
+        move |_| {
+            let selected = vpn_protocol_dropdown.selected() as usize;
+            let Some((protocol, _)) = VPN_PROTOCOLS.get(selected).copied() else {
+                return;
+            };
+            let dir = profile_dir(protocol);
+            match spawn_show_config_dir(dir) {
+                Ok(()) => vpn_profile_status_label.set_label(&format!("Opening {dir} as root…")),
+                Err(e) => vpn_profile_status_label.set_label(&format!("Failed to open {dir}: {e}")),
+            }
+        }
+    });
+
+    let connect_via_tor_check = gtk::CheckButton::with_label("Connect via Tor (SOCKS 127.0.0.1:9050)");
+    connect_via_tor_check.set_sensitive(protocol_supports_tor_chaining(VPN_PROTOCOLS[0].0));
+    connect_via_tor_check.set_tooltip_text(Some(
+        "VPN-over-Tor chaining. Only available for OpenVPN, Xray, and Shadowsocks — Tor's SOCKS \
+         proxy is TCP-only, so WireGuard/AmneziaWG (UDP tunnels), Hysteria2 (QUIC/UDP), and SOCKS5 \
+         (no chaining slot) can't be routed through it.",
+    ));
+    network_tab.append(&connect_via_tor_check);
+
+    vpn_protocol_dropdown.connect_selected_notify({
+        let connect_via_tor_check = connect_via_tor_check.clone();
+        let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+        let vpn_profile_empty_label = vpn_profile_empty_label.clone();
+        let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
+        move |dropdown| {
+            let selected = dropdown.selected() as usize;
+            let supported = VPN_PROTOCOLS
+                .get(selected)
+                .map(|(protocol, _)| protocol_supports_tor_chaining(*protocol))
+                .unwrap_or(false);
+            connect_via_tor_check.set_sensitive(supported);
+            if !supported {
+                connect_via_tor_check.set_active(false);
+            }
+
+            if let Some((protocol, label)) = VPN_PROTOCOLS.get(selected).copied() {
+                refresh_vpn_profiles(
+                    protocol,
+                    label,
+                    vpn_profile_dropdown.clone(),
+                    vpn_profile_empty_label.clone(),
+                    Rc::clone(&vpn_profiles_state),
+                );
+            }
+        }
+    });
 
     let vpn_action_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let vpn_connect_btn = gtk::Button::with_label("Connect");
     let vpn_disconnect_btn = gtk::Button::with_label("Disconnect");
     vpn_action_row.append(&vpn_connect_btn);
     vpn_action_row.append(&vpn_disconnect_btn);
-    root.append(&vpn_action_row);
+    network_tab.append(&vpn_action_row);
 
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    network_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
-    // --- Identity --------------------------------------------------------
-    root.append(&section_heading("Identity"));
+    // --- Connection Info -----------------------------------------------
+    network_tab.append(&section_heading("Connection Info"));
+
+    let route_label = gtk::Label::new(Some("Default route: unknown"));
+    route_label.set_halign(gtk::Align::Start);
+    network_tab.append(&route_label);
+
+    let (dns_row, dns_dot, dns_label) = status_row("DNS");
+    network_tab.append(&dns_row);
+
+    let dns_resolver_label = gtk::Label::new(Some("Resolver: unknown"));
+    dns_resolver_label.set_halign(gtk::Align::Start);
+    dns_resolver_label.set_wrap(true);
+    network_tab.append(&dns_resolver_label);
+
+    let dns_detail_label = gtk::Label::new(None);
+    dns_detail_label.set_halign(gtk::Align::Start);
+    dns_detail_label.set_wrap(true);
+    network_tab.append(&dns_detail_label);
+
+    let public_ip_label = gtk::Label::new(Some("Public IP: not checked"));
+    public_ip_label.set_halign(gtk::Align::Start);
+    public_ip_label.set_wrap(true);
+    network_tab.append(&public_ip_label);
+
+    let public_ip_btn = gtk::Button::with_label("Check Public IP");
+    network_tab.append(&public_ip_btn);
+
+    let public_ip_hint = gtk::Label::new(Some(
+        "Clicking sends one live request to an external service (icanhazip.com by default), \
+         which will see this machine's real public IP. Never checked automatically.",
+    ));
+    public_ip_hint.add_css_class("hint");
+    public_ip_hint.set_halign(gtk::Align::Start);
+    public_ip_hint.set_wrap(true);
+    network_tab.append(&public_ip_hint);
+
+    append_tab(&notebook, "Network", &network_tab);
+
+    // =======================================================================
+    // Identity tab
+    // =======================================================================
+    let identity_tab = new_tab_box();
 
     let hostname_label = gtk::Label::new(Some("Hostname: unknown"));
     hostname_label.set_halign(gtk::Align::Start);
-    root.append(&hostname_label);
+    identity_tab.append(&hostname_label);
     let hostname_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let hostname_randomize_btn = gtk::Button::with_label("Randomize");
     let hostname_restore_btn = gtk::Button::with_label("Restore original");
     hostname_row.append(&hostname_randomize_btn);
     hostname_row.append(&hostname_restore_btn);
-    root.append(&hostname_row);
+    identity_tab.append(&hostname_row);
 
     let timezone_label = gtk::Label::new(Some("Timezone: unknown"));
     timezone_label.set_halign(gtk::Align::Start);
-    root.append(&timezone_label);
+    identity_tab.append(&timezone_label);
     let timezone_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let timezone_randomize_btn = gtk::Button::with_label("Randomize");
     let timezone_restore_btn = gtk::Button::with_label("Restore original");
     timezone_row.append(&timezone_randomize_btn);
     timezone_row.append(&timezone_restore_btn);
-    root.append(&timezone_row);
+    identity_tab.append(&timezone_row);
 
     let mac_label = gtk::Label::new(Some("MAC: unknown"));
     mac_label.set_halign(gtk::Align::Start);
-    root.append(&mac_label);
+    identity_tab.append(&mac_label);
     let mac_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let mac_randomize_btn = gtk::Button::with_label("Randomize");
     let mac_restore_btn = gtk::Button::with_label("Restore permanent");
     mac_row.append(&mac_randomize_btn);
     mac_row.append(&mac_restore_btn);
-    root.append(&mac_row);
+    identity_tab.append(&mac_row);
 
     let (ipv6_row, ipv6_dot, ipv6_label) = status_row("IPv6");
-    root.append(&ipv6_row);
+    identity_tab.append(&ipv6_row);
     let ipv6_row_btns = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let ipv6_on_btn = gtk::Button::with_label("Enable");
     let ipv6_off_btn = gtk::Button::with_label("Disable");
     ipv6_row_btns.append(&ipv6_on_btn);
     ipv6_row_btns.append(&ipv6_off_btn);
-    root.append(&ipv6_row_btns);
+    identity_tab.append(&ipv6_row_btns);
 
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    append_tab(&notebook, "Identity", &identity_tab);
 
-    // --- Devices -----------------------------------------------------------
-    root.append(&section_heading("Devices"));
+    // =======================================================================
+    // Devices tab
+    // =======================================================================
+    let devices_tab = new_tab_box();
 
     let (wifi_row, wifi_dot, wifi_label) = status_row("WiFi");
     let (bt_row, bt_dot, bt_label) = status_row("Bluetooth");
@@ -348,13 +748,13 @@ pub fn build(app: &gtk::Application) {
     let (usbstor_row, usbstor_dot, usbstor_label) = status_row("USB Storage");
     let (usbguard_row, usbguard_dot, usbguard_label) = status_row("USBGuard");
     for row in [&wifi_row, &bt_row, &cam_row, &mic_row, &usbstor_row, &usbguard_row] {
-        root.append(row);
+        devices_tab.append(row);
     }
 
     let devices_detail_label = gtk::Label::new(None);
     devices_detail_label.set_wrap(true);
     devices_detail_label.set_halign(gtk::Align::Start);
-    root.append(&devices_detail_label);
+    devices_tab.append(&devices_detail_label);
 
     let device_toggle_row = |on_label: &str, off_label: &str| {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -372,20 +772,20 @@ pub fn build(app: &gtk::Application) {
     let (usbstor_btn_row, usbstor_on_btn, usbstor_off_btn) = device_toggle_row("On", "Off");
     let (usbguard_btn_row, usbguard_start_btn, usbguard_stop_btn) = device_toggle_row("Start", "Stop");
     for row in [&wifi_btn_row, &bt_btn_row, &cam_btn_row, &mic_btn_row, &usbstor_btn_row, &usbguard_btn_row] {
-        root.append(row);
+        devices_tab.append(row);
     }
 
     let usbguard_devices_label = gtk::Label::new(None);
     usbguard_devices_label.set_wrap(true);
     usbguard_devices_label.set_halign(gtk::Align::Start);
-    root.append(&usbguard_devices_label);
+    devices_tab.append(&usbguard_devices_label);
 
     let usbguard_refresh_btn = gtk::Button::with_label("Refresh connected devices");
-    root.append(&usbguard_refresh_btn);
+    devices_tab.append(&usbguard_refresh_btn);
 
     let usbguard_device_entry = gtk::Entry::new();
     usbguard_device_entry.set_placeholder_text(Some("device rule ID (from list above)"));
-    root.append(&usbguard_device_entry);
+    devices_tab.append(&usbguard_device_entry);
 
     let usbguard_device_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
     let usbguard_allow_btn = gtk::Button::with_label("Allow");
@@ -394,86 +794,510 @@ pub fn build(app: &gtk::Application) {
     usbguard_device_row.append(&usbguard_allow_btn);
     usbguard_device_row.append(&usbguard_allow_permanent_btn);
     usbguard_device_row.append(&usbguard_reject_btn);
-    root.append(&usbguard_device_row);
+    devices_tab.append(&usbguard_device_row);
 
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    append_tab(&notebook, "Devices", &devices_tab);
 
-    // --- Telemetry ---------------------------------------------------------
-    root.append(&section_heading("Telemetry"));
+    // =======================================================================
+    // Hardening tab (new) — wired to nyx-workflow's posture system
+    // =======================================================================
+    let hardening_tab = new_tab_box();
+    hardening_tab.append(&section_heading("Security posture"));
+
+    let posture_desc_label = gtk::Label::new(Some("Loading postures from nyx-workflow…"));
+    posture_desc_label.set_wrap(true);
+    posture_desc_label.set_halign(gtk::Align::Start);
+
+    let posture_buttons_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let posture_standard_btn = gtk::ToggleButton::with_label("Standard");
+    let posture_medium_btn = gtk::ToggleButton::with_label("Medium");
+    let posture_paranoid_btn = gtk::ToggleButton::with_label("Paranoid");
+    posture_medium_btn.set_group(Some(&posture_standard_btn));
+    posture_paranoid_btn.set_group(Some(&posture_standard_btn));
+    posture_standard_btn.set_active(true);
+    posture_buttons_row.append(&posture_standard_btn);
+    posture_buttons_row.append(&posture_medium_btn);
+    posture_buttons_row.append(&posture_paranoid_btn);
+    hardening_tab.append(&posture_buttons_row);
+    hardening_tab.append(&posture_desc_label);
+
+    let apply_posture_btn = gtk::Button::with_label("Apply");
+    apply_posture_btn.add_css_class("suggested-action");
+    hardening_tab.append(&apply_posture_btn);
+
+    let posture_results_label = gtk::Label::new(None);
+    posture_results_label.set_wrap(true);
+    posture_results_label.set_halign(gtk::Align::Start);
+    hardening_tab.append(&posture_results_label);
+
+    append_tab(&notebook, "Hardening", &hardening_tab);
+
+    // The three posture ids/descriptions, fetched once from `nyx-workflow
+    // list --json` (see workflow.rs) rather than hardcoded here.
+    let postures: Rc<RefCell<Vec<workflow::WorkflowListEntry>>> = Rc::new(RefCell::new(Vec::new()));
+    let selected_posture_level: Rc<RefCell<String>> = Rc::new(RefCell::new("standard".to_string()));
+
+    fn update_posture_description(
+        level: &str,
+        postures: &[workflow::WorkflowListEntry],
+        label: &gtk::Label,
+    ) {
+        let id = format!("posture-{level}");
+        match postures.iter().find(|p| p.id == id) {
+            Some(entry) => label.set_label(&entry.description),
+            None => label.set_label("description unavailable — is nyx-workflow installed?"),
+        }
+    }
+
+    let posture_list_apply: PostureListApplyFn = {
+        let postures = Rc::clone(&postures);
+        let selected_posture_level = Rc::clone(&selected_posture_level);
+        let posture_desc_label = posture_desc_label.clone();
+        Rc::new(move |result: Result<Vec<workflow::WorkflowListEntry>, String>| match result {
+            Ok(entries) => {
+                update_posture_description(&selected_posture_level.borrow(), &entries, &posture_desc_label);
+                *postures.borrow_mut() = entries;
+            }
+            Err(e) => posture_desc_label.set_label(&format!("could not load postures: {e}")),
+        })
+    };
+    run_posture_list_command(Rc::clone(&posture_list_apply));
+
+    for (button, level) in [
+        (&posture_standard_btn, "standard"),
+        (&posture_medium_btn, "medium"),
+        (&posture_paranoid_btn, "paranoid"),
+    ] {
+        button.connect_toggled({
+            let postures = Rc::clone(&postures);
+            let selected_posture_level = Rc::clone(&selected_posture_level);
+            let posture_desc_label = posture_desc_label.clone();
+            let button = button.clone();
+            move |_| {
+                if !button.is_active() {
+                    return;
+                }
+                *selected_posture_level.borrow_mut() = level.to_string();
+                update_posture_description(level, &postures.borrow(), &posture_desc_label);
+            }
+        });
+    }
+
+    let posture_apply: PostureApplyFn = {
+        let posture_results_label = posture_results_label.clone();
+        Rc::new(move |result: Result<workflow::WorkflowReport, String>| match result {
+            Ok(report) => {
+                let lines: Vec<String> = report
+                    .results
+                    .iter()
+                    .map(|r| {
+                        let mark = if !r.ran {
+                            "skip"
+                        } else if r.ok {
+                            " ok "
+                        } else {
+                            "FAIL"
+                        };
+                        format!("[{mark}] {} — {}", r.description, r.message)
+                    })
+                    .collect();
+                posture_results_label.set_label(&lines.join("\n"));
+            }
+            Err(e) => posture_results_label.set_label(&format!("error applying posture: {e}")),
+        })
+    };
+
+    apply_posture_btn.connect_clicked({
+        let selected_posture_level = Rc::clone(&selected_posture_level);
+        let posture_apply = Rc::clone(&posture_apply);
+        let posture_results_label = posture_results_label.clone();
+        let window = window.clone();
+        move |_| {
+            let level = selected_posture_level.borrow().clone();
+            let confirm = gtk::AlertDialog::builder()
+                .modal(true)
+                .message(format!("Apply the {level} posture?"))
+                .detail(
+                    "This runs nyx-workflow's posture workflow now — kill switch, identity, and \
+                     device settings will change per that posture's description above.",
+                )
+                .buttons(["Cancel", "Apply"])
+                .cancel_button(0)
+                .default_button(0)
+                .build();
+
+            let posture_apply = Rc::clone(&posture_apply);
+            let posture_results_label = posture_results_label.clone();
+            confirm.choose(Some(&window), gtk::gio::Cancellable::NONE, move |response| {
+                if response == Ok(1) {
+                    posture_results_label.set_label("applying…");
+                    run_posture_apply_command(level, Rc::clone(&posture_apply));
+                }
+            });
+        }
+    });
+
+    // =======================================================================
+    // Periodic Tasks tab (new) — wired to nyx-hardening's `schedule`
+    // subcommand family. A separate tab rather than a section inside
+    // Hardening: the Hardening tab above is already a full posture picker
+    // plus per-step results, and 12 task rows plus a dangerous-task
+    // section would roughly triple that tab's length.
+    // =======================================================================
+    let schedule_tab = new_tab_box();
+    schedule_tab.append(&section_heading("Periodic Tasks"));
+
+    let schedule_hint = gtk::Label::new(Some(
+        "Recurring maintenance, run on real systemd timers by nyx-hardening (root, via a polkit \
+         prompt for every action below — including just checking current status). Check a task, \
+         set the interval, then Activate Timer. Unchecking a task that's currently active and \
+         clicking Activate Timer removes its timer.",
+    ));
+    schedule_hint.set_wrap(true);
+    schedule_hint.set_halign(gtk::Align::Start);
+    schedule_hint.add_css_class("hint");
+    schedule_tab.append(&schedule_hint);
+
+    let interval_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let interval_row_label = gtk::Label::new(Some("Interval (seconds):"));
+    let interval_spin = gtk::SpinButton::with_range(60.0, 2_592_000.0, 60.0);
+    interval_spin.set_digits(0);
+    interval_spin.set_value(3600.0);
+    interval_row.append(&interval_row_label);
+    interval_row.append(&interval_spin);
+    schedule_tab.append(&interval_row);
+
+    let interface_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let interface_row_label = gtk::Label::new(Some("Interface (Randomize MAC only):"));
+    let schedule_interface_entry = gtk::Entry::new();
+    schedule_interface_entry.set_placeholder_text(Some("e.g. wlan0"));
+    interface_row.append(&interface_row_label);
+    interface_row.append(&schedule_interface_entry);
+    schedule_tab.append(&interface_row);
+
+    // Pre-fill from the same interface the Identity tab's MAC
+    // randomize/restore buttons already act on (`mac_interface`, populated
+    // from `IdentityReport::interfaces.first()`) rather than leaving this
+    // a blind free-text field — see `identity_apply` further down, which
+    // updates `mac_interface` on every identity refresh.
+    schedule_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+
+    let mut schedule_task_ids: Vec<&'static str> = Vec::new();
+    let mut schedule_task_checks: Vec<gtk::CheckButton> = Vec::new();
+    let mut schedule_task_status_labels: Vec<gtk::Label> = Vec::new();
+
+    schedule_tab.append(&section_heading("Routine tasks"));
+    for task in PERIODIC_TASKS.iter().filter(|t| !t.dangerous) {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let check = gtk::CheckButton::with_label(task.label);
+        let status = gtk::Label::new(Some("checking…"));
+        status.add_css_class("hint");
+        row.append(&check);
+        row.append(&status);
+        schedule_tab.append(&row);
+        schedule_task_ids.push(task.id);
+        schedule_task_checks.push(check);
+        schedule_task_status_labels.push(status);
+    }
+
+    schedule_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    schedule_tab.append(&section_heading("Dangerous tasks"));
+    let schedule_dangerous_warning = gtk::Label::new(Some(
+        "These four run genuinely slow and/or irreversible nyx-wipe operations: multi-hour \
+         free-space overwriting, and recursive secure shredding of every local user's Documents, \
+         Downloads, or Desktop folder. Activating one asks for confirmation first.",
+    ));
+    schedule_dangerous_warning.set_wrap(true);
+    schedule_dangerous_warning.set_halign(gtk::Align::Start);
+    schedule_dangerous_warning.add_css_class("hint");
+    schedule_tab.append(&schedule_dangerous_warning);
+    for task in PERIODIC_TASKS.iter().filter(|t| t.dangerous) {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let check = gtk::CheckButton::with_label(task.label);
+        check.add_css_class("destructive-action");
+        let status = gtk::Label::new(Some("checking…"));
+        status.add_css_class("hint");
+        row.append(&check);
+        row.append(&status);
+        schedule_tab.append(&row);
+        schedule_task_ids.push(task.id);
+        schedule_task_checks.push(check);
+        schedule_task_status_labels.push(status);
+    }
+
+    let schedule_action_btn = gtk::Button::with_label("Activate Timer");
+    schedule_action_btn.add_css_class("suggested-action");
+    schedule_tab.append(&schedule_action_btn);
+
+    let schedule_result_label = gtk::Label::new(None);
+    schedule_result_label.set_wrap(true);
+    schedule_result_label.set_halign(gtk::Align::Start);
+    schedule_tab.append(&schedule_result_label);
+
+    append_tab(&notebook, "Periodic Tasks", &schedule_tab);
+
+    // Real installed/enabled/interval state, as last reported by `schedule
+    // status` — indexed in parallel with `schedule_task_ids`/
+    // `schedule_task_checks` above. Used by the Activate Timer handler to
+    // decide which unchecked tasks actually need a `remove` call, rather
+    // than firing a harmless-but-needless pkexec prompt for every task
+    // that was never installed in the first place.
+    let schedule_task_installed: Rc<RefCell<Vec<bool>>> =
+        Rc::new(RefCell::new(vec![false; schedule_task_ids.len()]));
+
+    let schedule_status_apply: ScheduleStatusApplyFn = {
+        let schedule_task_ids = schedule_task_ids.clone();
+        let schedule_task_checks = schedule_task_checks.clone();
+        let schedule_task_status_labels = schedule_task_status_labels.clone();
+        let schedule_task_installed = Rc::clone(&schedule_task_installed);
+        Rc::new(move |result: Result<Vec<schedule::TaskStatus>, String>| match result {
+            Ok(statuses) => {
+                let mut installed_vec = vec![false; schedule_task_ids.len()];
+                for (i, task_id) in schedule_task_ids.iter().enumerate() {
+                    match statuses.iter().find(|s| s.task == *task_id) {
+                        Some(s) => {
+                            installed_vec[i] = s.installed;
+                            schedule_task_checks[i].set_active(s.installed && s.enabled);
+                            let base = if s.installed {
+                                if s.enabled { "installed, enabled" } else { "installed, disabled" }
+                            } else {
+                                "not installed"
+                            };
+                            let interval_note = s
+                                .interval_secs
+                                .map(|secs| format!(", every {secs}s"))
+                                .unwrap_or_default();
+                            schedule_task_status_labels[i].set_label(&format!("{base}{interval_note}"));
+                        }
+                        None => schedule_task_status_labels[i].set_label("unknown"),
+                    }
+                }
+                *schedule_task_installed.borrow_mut() = installed_vec;
+            }
+            Err(e) => {
+                for label in &schedule_task_status_labels {
+                    label.set_label(&format!("status error: {e}"));
+                }
+            }
+        })
+    };
+    run_schedule_status_command(Rc::clone(&schedule_status_apply));
+
+    let schedule_actions_apply: ScheduleActionsApplyFn = {
+        let schedule_result_label = schedule_result_label.clone();
+        let schedule_status_apply = Rc::clone(&schedule_status_apply);
+        Rc::new(move |result: Result<ScheduleActionResults, String>| match result {
+            Ok(results) => {
+                let lines: Vec<String> = results
+                    .iter()
+                    .map(|(task_id, r)| match r {
+                        Ok(msg) => format!("[ ok ] {task_id}: {msg}"),
+                        Err(e) => format!("[FAIL] {task_id}: {e}"),
+                    })
+                    .collect();
+                schedule_result_label.set_label(&lines.join("\n"));
+                run_schedule_status_command(Rc::clone(&schedule_status_apply));
+            }
+            Err(e) => schedule_result_label.set_label(&format!("error: {e}")),
+        })
+    };
+
+    schedule_action_btn.connect_clicked({
+        let schedule_task_ids = schedule_task_ids.clone();
+        let schedule_task_checks = schedule_task_checks.clone();
+        let schedule_task_installed = Rc::clone(&schedule_task_installed);
+        let interval_spin = interval_spin.clone();
+        let schedule_interface_entry = schedule_interface_entry.clone();
+        let schedule_result_label = schedule_result_label.clone();
+        let schedule_actions_apply = Rc::clone(&schedule_actions_apply);
+        let window = window.clone();
+        move |_| {
+            let interval_secs = interval_spin.value() as u64;
+            let installed = schedule_task_installed.borrow().clone();
+            let mut actions = Vec::new();
+            let mut dangerous_activating: Vec<&'static str> = Vec::new();
+
+            for (i, task_id) in schedule_task_ids.iter().enumerate() {
+                let def = PERIODIC_TASKS
+                    .iter()
+                    .find(|t| t.id == *task_id)
+                    .expect("schedule_task_ids only ever holds PERIODIC_TASKS ids");
+                let checked = schedule_task_checks[i].is_active();
+                if checked {
+                    if def.dangerous {
+                        dangerous_activating.push(task_id);
+                    }
+                    let interface = if def.needs_interface {
+                        let text = schedule_interface_entry.text().to_string();
+                        if text.trim().is_empty() { None } else { Some(text) }
+                    } else {
+                        None
+                    };
+                    actions.push(schedule::ScheduleAction {
+                        task_id: task_id.to_string(),
+                        kind: schedule::ScheduleActionKind::Install { interval_secs, interface },
+                    });
+                } else if installed.get(i).copied().unwrap_or(false) {
+                    actions.push(schedule::ScheduleAction {
+                        task_id: task_id.to_string(),
+                        kind: schedule::ScheduleActionKind::Remove,
+                    });
+                }
+            }
+
+            if actions.is_empty() {
+                schedule_result_label.set_label("nothing to change");
+                return;
+            }
+
+            if dangerous_activating.is_empty() {
+                schedule_result_label.set_label("applying…");
+                run_schedule_actions_command(actions, Rc::clone(&schedule_actions_apply));
+            } else {
+                let list = dangerous_activating.join(", ");
+                let confirm = gtk::AlertDialog::builder()
+                    .modal(true)
+                    .message("Activate a dangerous periodic task?")
+                    .detail(format!(
+                        "This schedules the following task(s) to run unattended, on a recurring \
+                         timer, from now on: {list}. Free-space wiping and Documents/Downloads/\
+                         Desktop shredding are slow and cannot be undone once a run starts."
+                    ))
+                    .buttons(["Cancel", "Activate"])
+                    .cancel_button(0)
+                    .default_button(0)
+                    .build();
+
+                let schedule_actions_apply = Rc::clone(&schedule_actions_apply);
+                let schedule_result_label = schedule_result_label.clone();
+                confirm.choose(Some(&window), gtk::gio::Cancellable::NONE, move |response| {
+                    if response == Ok(1) {
+                        schedule_result_label.set_label("applying…");
+                        run_schedule_actions_command(actions, Rc::clone(&schedule_actions_apply));
+                    }
+                });
+            }
+        }
+    });
+
+    // =======================================================================
+    // Browsers tab (new)
+    // =======================================================================
+    let browsers_tab = new_tab_box();
+    browsers_tab.append(&section_heading("Browsers"));
+
+    let nyx_browser_btn = gtk::Button::with_label("Nyx Browser");
+    let nyx_oniux_browser_btn = gtk::Button::with_label("Nyx Oniux Browser");
+    let nyx_tor_browser_btn = gtk::Button::with_label("Nyx Tor Browser");
+    let nyx_disposable_browser_btn = gtk::Button::with_label("Nyx Disposable Browser");
+    for button in [
+        &nyx_browser_btn,
+        &nyx_oniux_browser_btn,
+        &nyx_tor_browser_btn,
+        &nyx_disposable_browser_btn,
+    ] {
+        browsers_tab.append(button);
+    }
+
+    let browsers_status_label = gtk::Label::new(None);
+    browsers_status_label.set_wrap(true);
+    browsers_status_label.set_halign(gtk::Align::Start);
+    browsers_tab.append(&browsers_status_label);
+
+    append_tab(&notebook, "Browsers", &browsers_tab);
+
+    for (button, binary, name) in [
+        (&nyx_browser_btn, "/usr/bin/nyx-browser", "Nyx Browser"),
+        (&nyx_oniux_browser_btn, "/usr/bin/nyx-oniux-browser", "Nyx Oniux Browser"),
+        (&nyx_tor_browser_btn, "/usr/bin/nyx-tor-browser", "Nyx Tor Browser"),
+        (&nyx_disposable_browser_btn, "/usr/bin/nyx-disposable-browser", "Nyx Disposable Browser"),
+    ] {
+        button.connect_clicked({
+            let browsers_status_label = browsers_status_label.clone();
+            move |_| match spawn_browser(binary) {
+                Ok(()) => browsers_status_label.set_label(&format!("Launched {name}")),
+                Err(e) => browsers_status_label.set_label(&format!("Failed to launch {name}: {e}")),
+            }
+        });
+    }
+
+    // =======================================================================
+    // Emergency tab: Kill Switch level + Panic Mode
+    // =======================================================================
+    let emergency_tab = new_tab_box();
+
+    let (ks_row, ks_dot, ks_label) = status_row("Kill Switch");
+    let (panic_row, panic_dot, panic_label) = status_row("Panic Mode");
+    emergency_tab.append(&ks_row);
+    emergency_tab.append(&panic_row);
+
+    let ks_heading = gtk::Label::new(Some("Kill switch level"));
+    ks_heading.set_halign(gtk::Align::Start);
+    emergency_tab.append(&ks_heading);
+
+    let ks_buttons = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let ks_off_btn = gtk::Button::with_label("Off");
+    let ks_soft_btn = gtk::Button::with_label("Soft");
+    let ks_medium_btn = gtk::Button::with_label("Medium");
+    let ks_armed_btn = gtk::Button::with_label("Armed");
+    ks_buttons.append(&ks_off_btn);
+    ks_buttons.append(&ks_soft_btn);
+    ks_buttons.append(&ks_medium_btn);
+    ks_buttons.append(&ks_armed_btn);
+    emergency_tab.append(&ks_buttons);
+
+    let panic_btn = gtk::Button::with_label("PANIC — lock down network");
+    panic_btn.add_css_class("destructive-action");
+    emergency_tab.append(&panic_btn);
+
+    emergency_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    emergency_tab.append(&section_heading("Installation Integrity"));
+
+    let (integrity_row, integrity_dot, integrity_label) = status_row("Integrity");
+    emergency_tab.append(&integrity_row);
+
+    let verify_installation_btn = gtk::Button::with_label("Verify Installation");
+    emergency_tab.append(&verify_installation_btn);
+
+    let integrity_detail_label = gtk::Label::new(None);
+    integrity_detail_label.set_wrap(true);
+    integrity_detail_label.set_halign(gtk::Align::Start);
+    emergency_tab.append(&integrity_detail_label);
+
+    append_tab(&notebook, "Emergency", &emergency_tab);
+
+    // =======================================================================
+    // Telemetry tab
+    // =======================================================================
+    let telemetry_tab = new_tab_box();
 
     let cpu_label = gtk::Label::new(Some("CPU: unknown"));
     cpu_label.set_halign(gtk::Align::Start);
-    root.append(&cpu_label);
+    telemetry_tab.append(&cpu_label);
 
     let mem_label = gtk::Label::new(Some("Memory: unknown"));
     mem_label.set_halign(gtk::Align::Start);
-    root.append(&mem_label);
+    telemetry_tab.append(&mem_label);
 
     let disk_label = gtk::Label::new(Some("Disk (/): unknown"));
     disk_label.set_halign(gtk::Align::Start);
-    root.append(&disk_label);
+    telemetry_tab.append(&disk_label);
 
     let net_label = gtk::Label::new(Some("Network: unknown"));
     net_label.set_halign(gtk::Align::Start);
     net_label.set_wrap(true);
-    root.append(&net_label);
+    telemetry_tab.append(&net_label);
 
     let uptime_label = gtk::Label::new(Some("Uptime: unknown"));
     uptime_label.set_halign(gtk::Align::Start);
-    root.append(&uptime_label);
+    telemetry_tab.append(&uptime_label);
 
-    root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    append_tab(&notebook, "Telemetry", &telemetry_tab);
 
-    // --- Connection Info -----------------------------------------------
-    root.append(&section_heading("Connection Info"));
-
-    let route_label = gtk::Label::new(Some("Default route: unknown"));
-    route_label.set_halign(gtk::Align::Start);
-    root.append(&route_label);
-
-    let (dns_row, dns_dot, dns_label) = status_row("DNS");
-    root.append(&dns_row);
-
-    let dns_resolver_label = gtk::Label::new(Some("Resolver: unknown"));
-    dns_resolver_label.set_halign(gtk::Align::Start);
-    dns_resolver_label.set_wrap(true);
-    root.append(&dns_resolver_label);
-
-    let dns_detail_label = gtk::Label::new(None);
-    dns_detail_label.set_halign(gtk::Align::Start);
-    dns_detail_label.set_wrap(true);
-    root.append(&dns_detail_label);
-
-    let public_ip_label = gtk::Label::new(Some("Public IP: not checked"));
-    public_ip_label.set_halign(gtk::Align::Start);
-    public_ip_label.set_wrap(true);
-    root.append(&public_ip_label);
-
-    let public_ip_btn = gtk::Button::with_label("Check Public IP");
-    root.append(&public_ip_btn);
-
-    let public_ip_hint = gtk::Label::new(Some(
-        "Clicking sends one live request to an external service (icanhazip.com by default), \
-         which will see this machine's real public IP. Never checked automatically.",
-    ));
-    public_ip_hint.add_css_class("hint");
-    public_ip_hint.set_halign(gtk::Align::Start);
-    public_ip_hint.set_wrap(true);
-    root.append(&public_ip_hint);
-
-    let status_label = gtk::Label::new(Some("connecting to nyx-health…"));
-    status_label.set_wrap(true);
-    status_label.set_halign(gtk::Align::Start);
-    root.append(&status_label);
-
-    let scroller = gtk::ScrolledWindow::new();
-    scroller.set_child(Some(&root));
-    scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
-    window.set_child(Some(&scroller));
-    window.present();
-
+    // =======================================================================
+    // State + polling + signal wiring
+    // =======================================================================
     let cached = Rc::new(RefCell::new(HealthState::default()));
-    let vpn_protocol = Rc::new(Cell::new(VpnProtocol::WireGuard));
     // The interface Randomize/Restore MAC act on — the first one reported
     // by nyx-identity. A future revision could let the user pick among
     // several; most machines only have one to worry about.
@@ -485,9 +1309,14 @@ pub fn build(app: &gtk::Application) {
             Ok(out) => {
                 if let Some(state) = out.data.clone() {
                     set_dot(&tor_dot, state.tor_active);
+                    set_dot(&header_tor_dot, state.tor_active);
                     set_level_dot(&ks_dot, state.kill_switch_level);
                     set_dot(&panic_dot, state.panic_mode);
                     tor_label.set_label(&format!(
+                        "Tor: {}",
+                        if state.tor_active { "active" } else { "inactive" }
+                    ));
+                    header_tor_label.set_label(&format!(
                         "Tor: {}",
                         if state.tor_active { "active" } else { "inactive" }
                     ));
@@ -518,6 +1347,7 @@ pub fn build(app: &gtk::Application) {
         Ok(out) => {
             if let Some(report) = out.data {
                 set_security_dot(&vpn_dot, report.state);
+                set_security_dot(&header_vpn_dot, report.state);
                 let label = match (&report.protocol, &report.profile) {
                     (Some(protocol), Some(profile)) => {
                         format!("VPN: {profile} ({protocol:?})")
@@ -525,6 +1355,7 @@ pub fn build(app: &gtk::Application) {
                     _ => "VPN: disconnected".to_string(),
                 };
                 vpn_label.set_label(&label);
+                header_vpn_label.set_label(&label);
                 vpn_detail_label.set_label(&report.detail);
             }
         }
@@ -533,6 +1364,7 @@ pub fn build(app: &gtk::Application) {
 
     let identity_apply: IdentityApplyFn = {
         let mac_interface = Rc::clone(&mac_interface);
+        let schedule_interface_entry = schedule_interface_entry.clone();
         Rc::new(move |result: Result<NyxOutput<IdentityReport>, String>| match result {
             Ok(out) => {
                 if let Some(report) = out.data {
@@ -554,6 +1386,14 @@ pub fn build(app: &gtk::Application) {
                             first.interface,
                             first.mac_address.as_deref().unwrap_or("unknown")
                         ));
+                        // Pre-fills the Periodic Tasks tab's Randomize MAC
+                        // interface field with the same interface the
+                        // Identity tab's own Randomize/Restore buttons act
+                        // on — only while the operator hasn't typed
+                        // anything else in there themselves.
+                        if schedule_interface_entry.text().is_empty() {
+                            schedule_interface_entry.set_text(&first.interface);
+                        }
                     } else {
                         mac_label.set_label("MAC: no interface found");
                     }
@@ -654,21 +1494,33 @@ pub fn build(app: &gtk::Application) {
     let default_route_apply: DefaultRouteApplyFn =
         Rc::new(move |result: Result<DefaultRoute, String>| match result {
             Ok(route) => {
-                let text = match (route.interface, route.gateway) {
+                let text = match (&route.interface, &route.gateway) {
                     (Some(iface), Some(gateway)) => format!("Default route: {iface} via {gateway}"),
                     (Some(iface), None) => format!("Default route: {iface}"),
                     _ => "Default route: none found".to_string(),
                 };
                 route_label.set_label(&text);
+                header_route_label.set_label(&format!(
+                    "Route: {}",
+                    route.interface.as_deref().unwrap_or("none")
+                ));
             }
-            Err(e) => route_label.set_label(&format!("Default route: error ({e})")),
+            Err(e) => {
+                route_label.set_label(&format!("Default route: error ({e})"));
+                header_route_label.set_label("Route: error");
+            }
         });
 
     let dns_apply: DnsApplyFn = Rc::new(move |result: Result<NyxOutput<DnsReport>, String>| match result {
         Ok(out) => {
             if let Some(report) = out.data {
                 set_security_dot(&dns_dot, report.state);
+                set_security_dot(&header_dns_dot, report.state);
                 dns_label.set_label(&format!(
+                    "DNS: {}",
+                    if report.resolves { "resolving" } else { "not resolving" }
+                ));
+                header_dns_label.set_label(&format!(
                     "DNS: {}",
                     if report.resolves { "resolving" } else { "not resolving" }
                 ));
@@ -700,6 +1552,26 @@ pub fn build(app: &gtk::Application) {
             Err(e) => public_ip_label.set_label(&format!("Public IP: check failed ({e})")),
         });
 
+    let integrity_apply: IntegrityApplyFn =
+        Rc::new(move |result: Result<NyxOutput<IntegrityReport>, String>| match result {
+            Ok(out) => {
+                if let Some(report) = out.data {
+                    set_security_dot(&integrity_dot, report.state);
+                    integrity_label.set_label(&format!(
+                        "Integrity: {} manifest file(s), {} package(s) checked",
+                        report.manifest_checked, report.package_scanned
+                    ));
+                    let mismatches = report.manifest_mismatches.len() + report.package_mismatches.len();
+                    integrity_detail_label.set_label(&if mismatches > 0 {
+                        format!("{mismatches} mismatch(es) — {}", report.detail)
+                    } else {
+                        report.detail.clone()
+                    });
+                }
+            }
+            Err(e) => integrity_detail_label.set_label(&format!("error: {e}")),
+        });
+
     run_command(HealthCommand::Status, Rc::clone(&apply));
     run_vpn_command(VpnCommand::Status, Rc::clone(&vpn_apply));
     run_identity_command(IdentityCommand::Status, Rc::clone(&identity_apply));
@@ -707,6 +1579,13 @@ pub fn build(app: &gtk::Application) {
     run_telemetry_command(TelemetryCommand::Status, Rc::clone(&telemetry_apply));
     run_default_route_command(Rc::clone(&default_route_apply));
     run_dns_command(DnsCommand::Status, Rc::clone(&dns_apply));
+    // Verify Installation deliberately isn't fetched here either, beyond
+    // this one cheap `Status` read of whatever nyx-integrity last computed
+    // (no rescan) — the actual manifest/pacman scan only ever runs from an
+    // explicit click of "Verify Installation" below, same reasoning as
+    // Public IP above: a real scan is neither free nor instant enough to
+    // run silently on a timer.
+    run_integrity_command(IntegrityCommand::Status, Rc::clone(&integrity_apply));
     // Public IP is deliberately NOT fetched here — only ever on an explicit
     // click of "Check Public IP" (see `public_ip_btn`'s handler below).
 
@@ -781,41 +1660,34 @@ pub fn build(app: &gtk::Application) {
         }
     });
 
-    vpn_wg_btn.connect_clicked({
-        let vpn_protocol = Rc::clone(&vpn_protocol);
-        let vpn_wg_btn = vpn_wg_btn.clone();
-        let vpn_ovpn_btn = vpn_ovpn_btn.clone();
-        move |_| {
-            vpn_protocol.set(VpnProtocol::WireGuard);
-            vpn_wg_btn.add_css_class("selected");
-            vpn_ovpn_btn.remove_css_class("selected");
-        }
-    });
-
-    vpn_ovpn_btn.connect_clicked({
-        let vpn_protocol = Rc::clone(&vpn_protocol);
-        let vpn_wg_btn = vpn_wg_btn.clone();
-        let vpn_ovpn_btn = vpn_ovpn_btn.clone();
-        move |_| {
-            vpn_protocol.set(VpnProtocol::OpenVpn);
-            vpn_ovpn_btn.add_css_class("selected");
-            vpn_wg_btn.remove_css_class("selected");
-        }
-    });
-
     vpn_connect_btn.connect_clicked({
         let vpn_apply = Rc::clone(&vpn_apply);
-        let vpn_protocol = Rc::clone(&vpn_protocol);
-        let vpn_profile_entry = vpn_profile_entry.clone();
+        let vpn_profile_dropdown = vpn_profile_dropdown.clone();
+        let vpn_protocol_dropdown = vpn_protocol_dropdown.clone();
+        let connect_via_tor_check = connect_via_tor_check.clone();
+        let vpn_profiles_state = Rc::clone(&vpn_profiles_state);
         move |_| {
-            let profile = vpn_profile_entry.text().to_string();
-            if profile.trim().is_empty() {
+            let selected_profile = vpn_profiles_state
+                .borrow()
+                .get(vpn_profile_dropdown.selected() as usize)
+                .cloned();
+            let Some(profile) = selected_profile else {
                 return;
-            }
-            run_vpn_command(
-                VpnCommand::Connect { protocol: vpn_protocol.get(), profile },
-                Rc::clone(&vpn_apply),
-            );
+            };
+            let selected = vpn_protocol_dropdown.selected() as usize;
+            let Some((protocol, _)) = VPN_PROTOCOLS.get(selected).copied() else {
+                return;
+            };
+            let cmd = if connect_via_tor_check.is_sensitive() && connect_via_tor_check.is_active() {
+                VpnCommand::ConnectViaSocksProxy {
+                    protocol,
+                    profile,
+                    socks_proxy: SocksProxyAddr { host: "127.0.0.1".to_string(), port: 9050 },
+                }
+            } else {
+                VpnCommand::Connect { protocol, profile }
+            };
+            run_vpn_command(cmd, Rc::clone(&vpn_apply));
         }
     });
 
@@ -1044,6 +1916,18 @@ pub fn build(app: &gtk::Application) {
         move |_| {
             public_ip_label_for_btn.set_label("Public IP: checking… (contacting external service)");
             run_public_ip_command(Rc::clone(&public_ip_apply));
+        }
+    });
+
+    // The only place a real (non-`Status`) integrity scan is ever
+    // triggered — an explicit click, never the 5s timer. `quick: true`
+    // limits the pacman file-integrity half of the scan to NyxOS-critical
+    // packages rather than the whole system, matching the CLI's own
+    // documented reason for that flag.
+    verify_installation_btn.connect_clicked({
+        let integrity_apply = Rc::clone(&integrity_apply);
+        move |_| {
+            run_integrity_command(IntegrityCommand::Verify { quick: true }, Rc::clone(&integrity_apply));
         }
     });
 }

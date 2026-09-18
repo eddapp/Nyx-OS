@@ -6,6 +6,7 @@ use nyx_core::{
     Status, Toggle, VpnCommand, VpnReport, DEVICES_SOCKET, DNS_SOCKET, HEALTH_SOCKET,
     IDENTITY_SOCKET, INTEGRITY_SOCKET, VPN_SOCKET,
 };
+use serde::Serialize;
 use std::io::Write;
 
 /// Tor's SocksPort, per `iso/airootfs/etc/tor/torrc`'s `SocksPort
@@ -15,6 +16,7 @@ fn tor_socks_proxy() -> SocksProxyAddr {
     SocksProxyAddr { host: "127.0.0.1".to_string(), port: 9050 }
 }
 
+#[derive(Serialize)]
 pub struct StepResult {
     pub description: String,
     pub ran: bool,
@@ -22,14 +24,20 @@ pub struct StepResult {
     pub message: String,
 }
 
+#[derive(Serialize)]
 pub struct WorkflowReport {
     pub id: String,
+    pub description: String,
     pub results: Vec<StepResult>,
 }
 
+/// Prompt goes to stderr, not stdout — stdout is reserved for the one
+/// structured line `--json` mode prints at the end, and this prompt (like
+/// the rest of this module's live narration) needs to stay out of it even
+/// in non-json mode so nothing but the final report ever lands on stdout.
 fn ask_yes_no(prompt: &str) -> bool {
-    print!("{prompt} [y/N] ");
-    let _ = std::io::stdout().flush();
+    eprint!("{prompt} [y/N] ");
+    let _ = std::io::stderr().flush();
     let mut line = String::new();
     if std::io::stdin().read_line(&mut line).is_err() {
         return false;
@@ -123,7 +131,7 @@ fn restart_tor_over_vpn() -> (bool, String) {
 fn execute(cmd: &WorkflowCommand) -> (bool, String) {
     match cmd {
         WorkflowCommand::Message(text) => {
-            println!("{text}");
+            eprintln!("{text}");
             (true, text.clone())
         }
         WorkflowCommand::Confirm(text) => (ask_yes_no(text), "operator confirmation".to_string()),
@@ -266,11 +274,11 @@ pub fn run(workflow: &Workflow) -> WorkflowReport {
             }
         }
 
-        println!("-> {}", step.description);
+        eprintln!("-> {}", step.description);
         let (ok, message) = execute(&step.cmd);
-        println!("   {}", message);
+        eprintln!("   {}", message);
         if !ok {
-            println!("   rollback guidance: {}", step.rollback_hint);
+            eprintln!("   rollback guidance: {}", step.rollback_hint);
         }
 
         last_ok = ok;
@@ -284,6 +292,7 @@ pub fn run(workflow: &Workflow) -> WorkflowReport {
 
     WorkflowReport {
         id: workflow.id.to_string(),
+        description: workflow.description.to_string(),
         results,
     }
 }

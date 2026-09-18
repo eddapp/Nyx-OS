@@ -1,5 +1,7 @@
 mod checks;
+mod dnscrypt_config;
 mod handler;
+mod providers;
 mod state;
 mod systemd_ctl;
 
