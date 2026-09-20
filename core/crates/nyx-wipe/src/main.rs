@@ -8,6 +8,7 @@
 //! is used rarely and on purpose. Invoke it directly with `sudo`/`pkexec`
 //! each time instead.
 
+mod luks;
 mod targets;
 mod users;
 
@@ -54,6 +55,23 @@ enum Cmd {
         /// Required — acknowledges this is irreversible.
         #[arg(long)]
         yes: bool,
+    },
+    /// List every LUKS container the kernel currently sees, with what is
+    /// mounted on top of it and whether it backs `/`.
+    LuksList,
+    /// LUKS nuke: destroy every keyslot of one LUKS container (`cryptsetup
+    /// erase`), making its contents permanently unreadable. Without --yes
+    /// this only validates the device and reports its keyslot count.
+    LuksNuke {
+        /// `sda3`, `/dev/nvme0n1p2`, or a `/dev/disk/by-*` link.
+        #[arg(long)]
+        device: String,
+        /// Required to actually erase — acknowledges this is irreversible.
+        #[arg(long)]
+        yes: bool,
+        /// Also allow the container backing the running root filesystem.
+        #[arg(long)]
+        include_root_device: bool,
     },
 }
 
@@ -247,6 +265,93 @@ fn run_execute(targets: Vec<WipeTarget>, paths: Vec<PathBuf>, yes: bool) {
     }
 }
 
+fn run_luks_list() {
+    match luks::list() {
+        Ok(devices) => {
+            let message = if devices.is_empty() {
+                "no LUKS containers visible".to_string()
+            } else {
+                format!("{} LUKS container(s)", devices.len())
+            };
+            let data: Vec<serde_json::Value> = devices
+                .iter()
+                .map(|d| {
+                    serde_json::json!({
+                        "device": d.path,
+                        "mountpoints": d.mountpoints,
+                        "backs_root": d.backs_root,
+                    })
+                })
+                .collect();
+            NyxOutput::ok("nyx-wipe", "luks-list", message, Some(data)).print();
+        }
+        Err(e) => {
+            nyx_core::output::print_error("nyx-wipe", "luks-list", &e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_luks_nuke(device: String, yes: bool, include_root: bool) {
+    let (dev, keyslots) = match luks::plan(&device, include_root) {
+        Ok(p) => p,
+        Err(e) => {
+            nyx_core::output::print_error("nyx-wipe", "luks-nuke", &e);
+            std::process::exit(1);
+        }
+    };
+    let mounted_note = if dev.mountpoints.is_empty() {
+        String::new()
+    } else {
+        format!(" (currently mounted at {})", dev.mountpoints.join(", "))
+    };
+
+    if !yes {
+        let report = WipeReport {
+            target: format!("luks:{}", dev.path),
+            reversible: false,
+            files_affected: keyslots,
+            bytes_affected: 0,
+            executed: false,
+            warnings: Vec::new(),
+        };
+        NyxOutput::ok(
+            "nyx-wipe",
+            "luks-nuke",
+            format!(
+                "{} carries {keyslots} keyslot(s){mounted_note} — re-run with --yes to erase them                  all; without a header backup the data is then unrecoverable",
+                dev.path
+            ),
+            Some(report),
+        )
+        .print();
+        return;
+    }
+
+    let outcome = luks::execute(dev, keyslots);
+    let erased = outcome.keyslots_before.saturating_sub(outcome.keyslots_after);
+    let report = WipeReport {
+        target: format!("luks:{}", outcome.device.path),
+        reversible: false,
+        files_affected: erased,
+        bytes_affected: 0,
+        executed: outcome.keyslots_after == 0,
+        warnings: outcome.warnings,
+    };
+    let message = if outcome.keyslots_after == 0 {
+        format!(
+            "erased all {} keyslot(s) of {}{mounted_note} — the container can no longer be unlocked",
+            outcome.keyslots_before, outcome.device.path
+        )
+    } else {
+        format!(
+            "erase incomplete: {} of {} keyslot(s) remain on {} — see warnings",
+            outcome.keyslots_after, outcome.keyslots_before, outcome.device.path
+        )
+    };
+    NyxOutput::ok("nyx-wipe", "luks-nuke", message, Some(report)).print();
+}
+
 fn main() {
     nyx_core::logging::init();
 
@@ -270,6 +375,10 @@ fn main() {
             let targets = resolve_targets(targets, all);
             require_something(&targets, &paths);
             run_execute(targets, paths, yes);
+        }
+        Cmd::LuksList => run_luks_list(),
+        Cmd::LuksNuke { device, yes, include_root_device } => {
+            run_luks_nuke(device, yes, include_root_device)
         }
     }
 }

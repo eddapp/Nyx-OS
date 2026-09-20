@@ -1,6 +1,7 @@
 use crate::client;
 use crate::diagnostics::{self, DefaultRoute, PublicIpResult};
 use crate::schedule;
+use crate::wipe;
 use crate::workflow;
 use gtk::gio::prelude::*;
 use gtk::glib;
@@ -30,6 +31,7 @@ type PostureApplyFn = Rc<dyn Fn(Result<workflow::WorkflowReport, String>)>;
 type ScheduleStatusApplyFn = Rc<dyn Fn(Result<Vec<schedule::TaskStatus>, String>)>;
 type ScheduleActionResults = Vec<(String, Result<String, String>)>;
 type ScheduleActionsApplyFn = Rc<dyn Fn(Result<ScheduleActionResults, String>)>;
+type LuksNukeApplyFn = Rc<dyn Fn(Result<wipe::NukeResult, String>)>;
 
 /// Every VPN backend `nyx-vpn` actually implements (see
 /// `nyx_core::protocol::VpnProtocol`), in the order the Network tab's
@@ -94,13 +96,16 @@ fn free_provider_supports_country(provider: FreeProvider) -> bool {
     matches!(provider, FreeProvider::VpnGate)
 }
 
-/// The three commercial providers `nyx-vpn`'s `WriteProviderTemplate` can
+/// The six commercial providers `nyx-vpn`'s `WriteProviderTemplate` can
 /// write a config skeleton for (see `nyx_core::protocol::TemplateProvider`),
 /// in the order the Write Provider Template dropdown lists them.
 const TEMPLATE_PROVIDERS: &[(TemplateProvider, &str)] = &[
     (TemplateProvider::Mullvad, "Mullvad"),
     (TemplateProvider::ProtonVpn, "ProtonVPN"),
     (TemplateProvider::NordVpn, "NordVPN"),
+    (TemplateProvider::Ivpn, "IVPN"),
+    (TemplateProvider::PrivateInternetAccess, "Private Internet Access"),
+    (TemplateProvider::Surfshark, "Surfshark"),
 ];
 
 /// Real encryption methods `cbeuw/Cloak` accepts. `"plain"` is deliberately
@@ -208,6 +213,8 @@ fn load_css() {
         .dot-medium { background-color: #e67e22; }
         .selected { font-weight: bold; }
         .hint { font-size: 90%; color: #888888; }
+        .header-caption { font-size: 85%; color: #888888; letter-spacing: 1px; }
+        .header-line { font-size: 92%; }
         ",
     );
     gtk::style_context_add_provider_for_display(
@@ -229,6 +236,32 @@ fn status_row(label: &str) -> (gtk::Box, gtk::Box, gtk::Label) {
     row.append(&dot);
     row.append(&text);
     (row, dot, text)
+}
+
+/// One column of the always-visible live-status header: a bold caption
+/// over a stack of one-line facts. Mirrors the persistent five-panel
+/// status strip of the original (GTK-era) Kodachi dashboard.
+fn header_column(title: &str) -> gtk::Box {
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    column.set_hexpand(true);
+    let caption = gtk::Label::new(None);
+    caption.set_markup(&format!("<b>{title}</b>"));
+    caption.set_halign(gtk::Align::Start);
+    caption.add_css_class("header-caption");
+    column.append(&caption);
+    column
+}
+
+/// One fact line inside a header column — ellipsized rather than wrapped so
+/// a long resolver list or hostname can't push the other columns around.
+fn header_line(column: &gtk::Box, initial: &str) -> gtk::Label {
+    let label = gtk::Label::new(Some(initial));
+    label.set_halign(gtk::Align::Start);
+    label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    label.set_max_width_chars(28);
+    label.add_css_class("header-line");
+    column.append(&label);
+    label
 }
 
 fn section_heading(text: &str) -> gtk::Label {
@@ -468,8 +501,8 @@ pub fn build(app: &gtk::Application) {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
         .title("NyxOS Control")
-        .default_width(480)
-        .default_height(680)
+        .default_width(1040)
+        .default_height(720)
         .build();
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 10);
@@ -483,28 +516,70 @@ pub fn build(app: &gtk::Application) {
     heading.set_halign(gtk::Align::Start);
     root.append(&heading);
 
-    // A compact, always-visible status strip — unlike every value below,
-    // which is buried inside whichever tab owns it, these four read only
-    // from calls the tabs beneath them already make on the same 5s timer
-    // (see the timer closure further down): no second socket/subprocess
-    // call is issued just for this header.
-    let header_grid = gtk::Grid::new();
-    header_grid.set_column_spacing(18);
-    header_grid.set_row_spacing(2);
-    header_grid.set_margin_top(4);
-    header_grid.set_margin_bottom(4);
+    // The always-visible live-status header: five columns (System, Storage,
+    // IP, Network, Security) that stay above the tab strip, the way the
+    // original Kodachi dashboard keeps its five status panels above its
+    // tabs. Every value here is a second view of a call the tabs beneath
+    // already make on the same 5s timer (see the timer closure further
+    // down) — no extra socket/subprocess call is issued just for the
+    // header, and Public IP still only ever updates from its explicit
+    // "Check Public IP" button.
+    let header = gtk::Box::new(gtk::Orientation::Horizontal, 18);
+    header.set_margin_top(4);
+    header.set_margin_bottom(4);
 
+    let header_system_col = header_column("SYSTEM");
+    let header_hostname_label = header_line(&header_system_col, "Host: unknown");
+    let header_uptime_label = header_line(&header_system_col, "Uptime: unknown");
+    let header_cpu_label = header_line(&header_system_col, "CPU: unknown");
+    let header_mem_label = header_line(&header_system_col, "Memory: unknown");
+
+    let header_storage_col = header_column("STORAGE");
+    let header_disk_label = header_line(&header_storage_col, "Disk /: unknown");
+    let header_procs_label = header_line(&header_storage_col, "Processes: unknown");
+    let header_luks_label = header_line(&header_storage_col, "Root LUKS: unknown");
+    let header_tz_label = header_line(&header_storage_col, "Timezone: unknown");
+
+    let header_ip_col = header_column("IP");
+    let header_public_ip_label = header_line(&header_ip_col, "Public: not checked");
+    let header_local_ip_label = header_line(&header_ip_col, "Local: unknown");
+    let header_ipv6_label = header_line(&header_ip_col, "IPv6: unknown");
+
+    let header_network_col = header_column("NETWORK");
+    let header_route_label = header_line(&header_network_col, "Route: unknown");
+    let header_mac_label = header_line(&header_network_col, "MAC: unknown");
+    let header_resolver_label = header_line(&header_network_col, "Resolver: unknown");
+    let header_dnscrypt_label = header_line(&header_network_col, "DNSCrypt: unknown");
+
+    let header_security_col = header_column("SECURITY");
     let (header_vpn_row, header_vpn_dot, header_vpn_label) = status_row("VPN");
     let (header_tor_row, header_tor_dot, header_tor_label) = status_row("Tor");
     let (header_dns_row, header_dns_dot, header_dns_label) = status_row("DNS");
-    let header_route_label = gtk::Label::new(Some("Route: unknown"));
-    header_route_label.set_halign(gtk::Align::Start);
+    let (header_ks_row, header_ks_dot, header_ks_label) = status_row("Kill switch");
+    let (header_panic_row, header_panic_dot, header_panic_label) = status_row("Panic");
+    for (row, label) in [
+        (&header_vpn_row, &header_vpn_label),
+        (&header_tor_row, &header_tor_label),
+        (&header_dns_row, &header_dns_label),
+        (&header_ks_row, &header_ks_label),
+        (&header_panic_row, &header_panic_label),
+    ] {
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        label.set_max_width_chars(28);
+        label.add_css_class("header-line");
+        header_security_col.append(row);
+    }
 
-    header_grid.attach(&header_vpn_row, 0, 0, 1, 1);
-    header_grid.attach(&header_tor_row, 1, 0, 1, 1);
-    header_grid.attach(&header_route_label, 2, 0, 1, 1);
-    header_grid.attach(&header_dns_row, 3, 0, 1, 1);
-    root.append(&header_grid);
+    for column in [
+        &header_system_col,
+        &header_storage_col,
+        &header_ip_col,
+        &header_network_col,
+        &header_security_col,
+    ] {
+        header.append(column);
+    }
+    root.append(&header);
     root.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
 
     let notebook = gtk::Notebook::new();
@@ -1040,15 +1115,11 @@ pub fn build(app: &gtk::Application) {
                 Ok(out) => {
                     vpn_template_status_label.set_label(&out.message);
                     if out.data.is_some() {
-                        // Mullvad's template is WireGuard, ProtonVPN's and
-                        // NordVPN's are OpenVPN — only refresh the visible
-                        // dropdown if the currently selected protocol
-                        // matches the one this template was actually
-                        // written for.
-                        let template_protocol = match provider {
-                            TemplateProvider::Mullvad => VpnProtocol::WireGuard,
-                            TemplateProvider::ProtonVpn | TemplateProvider::NordVpn => VpnProtocol::OpenVpn,
-                        };
+                        // Only refresh the visible dropdown if the
+                        // currently selected protocol matches the one this
+                        // template was actually written for (WireGuard for
+                        // Mullvad/IVPN, OpenVPN for the rest).
+                        let template_protocol = provider.protocol();
                         if let Some((protocol, label)) = currently_selected_protocol
                             && protocol == template_protocol
                         {
@@ -1766,6 +1837,48 @@ pub fn build(app: &gtk::Application) {
     integrity_detail_label.set_halign(gtk::Align::Start);
     emergency_tab.append(&integrity_detail_label);
 
+    // --- LUKS nuke (duress) ------------------------------------------------
+    // `nyx-wipe luks-nuke`: `cryptsetup erase` on one container, destroying
+    // every keyslot so it can never be unlocked again. The device list is
+    // whatever `DevicesCommand::Status` last reported in `luks_devices` —
+    // the same lsblk-derived list the Devices tab's "encrypted root" fact
+    // comes from — never typed in freehand.
+    emergency_tab.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    emergency_tab.append(&section_heading("LUKS Nuke (duress)"));
+
+    let luks_nuke_hint = gtk::Label::new(Some(
+        "Permanently destroys every keyslot of the selected LUKS container (cryptsetup erase). \
+         The data becomes unrecoverable unless a header backup exists elsewhere. Nuking the \
+         container behind / keeps this session running from memory but the system will never \
+         unlock again.",
+    ));
+    luks_nuke_hint.set_wrap(true);
+    luks_nuke_hint.set_halign(gtk::Align::Start);
+    luks_nuke_hint.add_css_class("hint");
+    emergency_tab.append(&luks_nuke_hint);
+
+    let luks_device_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    let luks_device_dropdown = gtk::DropDown::from_strings(&[]);
+    luks_device_dropdown.set_visible(false);
+    let luks_device_empty_label = gtk::Label::new(Some("no LUKS containers reported"));
+    luks_device_empty_label.set_halign(gtk::Align::Start);
+    let luks_nuke_btn = gtk::Button::with_label("NUKE — erase keyslots");
+    luks_nuke_btn.add_css_class("destructive-action");
+    luks_nuke_btn.set_sensitive(false);
+    luks_device_row.append(&luks_device_dropdown);
+    luks_device_row.append(&luks_device_empty_label);
+    luks_device_row.append(&luks_nuke_btn);
+    emergency_tab.append(&luks_device_row);
+
+    let luks_nuke_status_label = gtk::Label::new(None);
+    luks_nuke_status_label.set_wrap(true);
+    luks_nuke_status_label.set_halign(gtk::Align::Start);
+    emergency_tab.append(&luks_nuke_status_label);
+
+    // Bare device names (`sda3`, `nvme0n1p2`) in dropdown order, straight
+    // from the last `DevicesReport.luks_devices`.
+    let luks_devices_state: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+
     append_tab(&notebook, "Emergency", &emergency_tab);
 
     // =======================================================================
@@ -1815,7 +1928,17 @@ pub fn build(app: &gtk::Application) {
                     set_dot(&header_tor_dot, state.tor_active);
                     tor_renew_btn.set_sensitive(state.tor_active);
                     set_level_dot(&ks_dot, state.kill_switch_level);
+                    set_level_dot(&header_ks_dot, state.kill_switch_level);
                     set_dot(&panic_dot, state.panic_mode);
+                    set_dot(&header_panic_dot, state.panic_mode);
+                    header_ks_label.set_label(&format!(
+                        "Kill switch: {}",
+                        level_label(state.kill_switch_level)
+                    ));
+                    header_panic_label.set_label(&format!(
+                        "Panic: {}",
+                        if state.panic_mode { "LOCKED DOWN" } else { "clear" }
+                    ));
                     tor_label.set_label(&format!(
                         "Tor: {}",
                         if state.tor_active { "active" } else { "inactive" }
@@ -1891,17 +2014,31 @@ pub fn build(app: &gtk::Application) {
                         "Hostname: {}",
                         report.hostname.as_deref().unwrap_or("unknown")
                     ));
+                    header_hostname_label.set_label(&format!(
+                        "Host: {}",
+                        report.hostname.as_deref().unwrap_or("unknown")
+                    ));
                     timezone_label.set_label(&format!(
+                        "Timezone: {}",
+                        report.timezone.as_deref().unwrap_or("unknown")
+                    ));
+                    header_tz_label.set_label(&format!(
                         "Timezone: {}",
                         report.timezone.as_deref().unwrap_or("unknown")
                     ));
                     set_dot_opt(&ipv6_dot, report.ipv6_enabled);
                     ipv6_label.set_label(&format!("IPv6: {}", on_off(report.ipv6_enabled)));
+                    header_ipv6_label.set_label(&format!("IPv6: {}", on_off(report.ipv6_enabled)));
 
                     if let Some(first) = report.interfaces.first() {
                         *mac_interface.borrow_mut() = Some(first.interface.clone());
                         mac_label.set_label(&format!(
                             "MAC ({}): {}",
+                            first.interface,
+                            first.mac_address.as_deref().unwrap_or("unknown")
+                        ));
+                        header_mac_label.set_label(&format!(
+                            "MAC {}: {}",
                             first.interface,
                             first.mac_address.as_deref().unwrap_or("unknown")
                         ));
@@ -1915,6 +2052,7 @@ pub fn build(app: &gtk::Application) {
                         }
                     } else {
                         mac_label.set_label("MAC: no interface found");
+                        header_mac_label.set_label("MAC: no interface");
                     }
                 }
             }
@@ -1922,10 +2060,41 @@ pub fn build(app: &gtk::Application) {
         })
     };
 
-    let devices_apply: DevicesApplyFn =
+    let devices_apply: DevicesApplyFn = {
+        let luks_devices_state = Rc::clone(&luks_devices_state);
+        let luks_device_dropdown = luks_device_dropdown.clone();
+        let luks_device_empty_label = luks_device_empty_label.clone();
+        let luks_nuke_btn = luks_nuke_btn.clone();
         Rc::new(move |result: Result<NyxOutput<DevicesReport>, String>| match result {
             Ok(out) => {
                 if let Some(report) = out.data {
+                    // Only rebuild the LUKS dropdown when the set actually
+                    // changes, so a 5s refresh never resets the operator's
+                    // selection mid-confirmation.
+                    if *luks_devices_state.borrow() != report.luks_devices {
+                        let names: Vec<&str> = report.luks_devices.iter().map(String::as_str).collect();
+                        if names.is_empty() {
+                            luks_device_dropdown.set_model(gtk::gio::ListModel::NONE);
+                            luks_device_dropdown.set_visible(false);
+                            luks_device_empty_label.set_visible(true);
+                            luks_nuke_btn.set_sensitive(false);
+                        } else {
+                            luks_device_dropdown.set_model(Some(&gtk::StringList::new(&names)));
+                            luks_device_dropdown.set_selected(0);
+                            luks_device_dropdown.set_visible(true);
+                            luks_device_empty_label.set_visible(false);
+                            luks_nuke_btn.set_sensitive(true);
+                        }
+                        *luks_devices_state.borrow_mut() = report.luks_devices.clone();
+                    }
+                    header_luks_label.set_label(&format!(
+                        "Root LUKS: {}",
+                        match report.encrypted_root {
+                            Some(true) => "encrypted",
+                            Some(false) => "NOT encrypted",
+                            None => "unknown",
+                        }
+                    ));
                     set_dot_opt(&wifi_dot, report.wifi_enabled);
                     wifi_label.set_label(&format!("WiFi: {}", on_off(report.wifi_enabled)));
                     set_dot_opt(&bt_dot, report.bluetooth_enabled);
@@ -1949,7 +2118,8 @@ pub fn build(app: &gtk::Application) {
                 }
             }
             Err(e) => devices_detail_label.set_label(&format!("error: {e}")),
-        });
+        })
+    };
 
     let telemetry_apply: TelemetryApplyFn =
         Rc::new(move |result: Result<NyxOutput<TelemetryReport>, String>| match result {
@@ -1967,21 +2137,41 @@ pub fn build(app: &gtk::Application) {
                         ),
                     };
                     cpu_label.set_label(&cpu_text);
+                    header_cpu_label.set_label(&match cpu.usage_percent {
+                        Some(p) => format!("CPU: {p:.0}%  load {:.2}", cpu.load_average_1m),
+                        None => format!("CPU: load {:.2}", cpu.load_average_1m),
+                    });
 
                     mem_label.set_label(&format!(
                         "Memory: {} / {}",
                         format_kb(report.memory.used_kb),
                         format_kb(report.memory.total_kb)
                     ));
+                    header_mem_label.set_label(&format!(
+                        "Memory: {} / {}",
+                        format_kb(report.memory.used_kb),
+                        format_kb(report.memory.total_kb)
+                    ));
 
                     match report.disks.iter().find(|d| d.mountpoint == "/") {
-                        Some(root_disk) => disk_label.set_label(&format!(
-                            "Disk (/): {} / {}",
-                            format_bytes(root_disk.used_bytes as f64),
-                            format_bytes(root_disk.total_bytes as f64)
-                        )),
-                        None => disk_label.set_label("Disk (/): not found"),
+                        Some(root_disk) => {
+                            disk_label.set_label(&format!(
+                                "Disk (/): {} / {}",
+                                format_bytes(root_disk.used_bytes as f64),
+                                format_bytes(root_disk.total_bytes as f64)
+                            ));
+                            header_disk_label.set_label(&format!(
+                                "Disk /: {} / {}",
+                                format_bytes(root_disk.used_bytes as f64),
+                                format_bytes(root_disk.total_bytes as f64)
+                            ));
+                        }
+                        None => {
+                            disk_label.set_label("Disk (/): not found");
+                            header_disk_label.set_label("Disk /: not found");
+                        }
                     }
+                    header_procs_label.set_label(&format!("Processes: {}", report.process_count));
 
                     let net_summary = report
                         .network
@@ -2005,6 +2195,7 @@ pub fn build(app: &gtk::Application) {
                         "Uptime: {hours}h {minutes}m — {} processes",
                         report.process_count
                     ));
+                    header_uptime_label.set_label(&format!("Uptime: {hours}h {minutes}m"));
                 }
             }
             Err(e) => cpu_label.set_label(&format!("error: {e}")),
@@ -2019,14 +2210,21 @@ pub fn build(app: &gtk::Application) {
                     _ => "Default route: none found".to_string(),
                 };
                 route_label.set_label(&text);
-                header_route_label.set_label(&format!(
-                    "Route: {}",
-                    route.interface.as_deref().unwrap_or("none")
-                ));
+                header_route_label.set_label(&match (&route.interface, &route.gateway) {
+                    (Some(iface), Some(gateway)) => format!("Route: {iface} via {gateway}"),
+                    (Some(iface), None) => format!("Route: {iface}"),
+                    _ => "Route: none".to_string(),
+                });
+                header_local_ip_label.set_label(&match (&route.interface, &route.address) {
+                    (Some(iface), Some(addr)) => format!("Local: {addr} ({iface})"),
+                    (Some(iface), None) => format!("Local: no IPv4 on {iface}"),
+                    _ => "Local: no default route".to_string(),
+                });
             }
             Err(e) => {
                 route_label.set_label(&format!("Default route: error ({e})"));
                 header_route_label.set_label("Route: error");
+                header_local_ip_label.set_label("Local: error");
             }
         });
 
@@ -2048,6 +2246,15 @@ pub fn build(app: &gtk::Application) {
                 } else {
                     report.resolver_addrs.join(", ")
                 };
+                header_resolver_label.set_label(&format!(
+                    "Resolver: {resolvers}{}",
+                    if report.resolver_is_local { "" } else { " (not local)" }
+                ));
+                header_dnscrypt_label.set_label(&format!(
+                    "DNSCrypt: {}{}",
+                    if report.dnscrypt_active { "active" } else { "inactive" },
+                    if report.foreign_listener_on_53 { " — foreign :53 listener" } else { "" }
+                ));
                 dns_resolver_label.set_label(&format!(
                     "Resolver: {resolvers} ({}) — DNSCrypt {}{}",
                     if report.resolver_is_local { "local" } else { "not local" },
@@ -2067,8 +2274,14 @@ pub fn build(app: &gtk::Application) {
     let public_ip_label_for_btn = public_ip_label.clone();
     let public_ip_apply: PublicIpApplyFn =
         Rc::new(move |result: Result<PublicIpResult, String>| match result {
-            Ok(res) => public_ip_label.set_label(&format!("Public IP: {} (via {})", res.ip, res.endpoint)),
-            Err(e) => public_ip_label.set_label(&format!("Public IP: check failed ({e})")),
+            Ok(res) => {
+                public_ip_label.set_label(&format!("Public IP: {} (via {})", res.ip, res.endpoint));
+                header_public_ip_label.set_label(&format!("Public: {}", res.ip));
+            }
+            Err(e) => {
+                public_ip_label.set_label(&format!("Public IP: check failed ({e})"));
+                header_public_ip_label.set_label("Public: check failed");
+            }
         });
 
     let integrity_apply: IntegrityApplyFn =
@@ -2528,6 +2741,106 @@ pub fn build(app: &gtk::Application) {
         move |_| {
             public_ip_label_for_btn.set_label("Public IP: checking… (contacting external service)");
             run_public_ip_command(Rc::clone(&public_ip_apply));
+        }
+    });
+
+    // LUKS nuke: a typed confirmation (the exact device name), not a
+    // two-button AlertDialog — this is the one dashboard action with no
+    // undo of any kind, and pkexec will additionally demand the password
+    // since nyx-wipe is outside the passwordless polkit rule.
+    luks_nuke_btn.connect_clicked({
+        let luks_devices_state = Rc::clone(&luks_devices_state);
+        let luks_device_dropdown = luks_device_dropdown.clone();
+        let luks_nuke_status_label = luks_nuke_status_label.clone();
+        let window = window.clone();
+        move |_| {
+            let selected = luks_device_dropdown.selected() as usize;
+            let Some(device) = luks_devices_state.borrow().get(selected).cloned() else {
+                return;
+            };
+
+            let dialog = gtk::Window::builder()
+                .transient_for(&window)
+                .modal(true)
+                .title("Confirm LUKS nuke")
+                .default_width(420)
+                .build();
+            let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+            content.set_margin_top(16);
+            content.set_margin_bottom(16);
+            content.set_margin_start(16);
+            content.set_margin_end(16);
+
+            let warning = gtk::Label::new(Some(&format!(
+                "This erases every keyslot of /dev/{device}. Nothing on it can be decrypted \
+                 again without a separate header backup. Type the device name exactly to \
+                 continue:"
+            )));
+            warning.set_wrap(true);
+            warning.set_halign(gtk::Align::Start);
+            content.append(&warning);
+
+            let entry = gtk::Entry::new();
+            entry.set_placeholder_text(Some(&device));
+            content.append(&entry);
+
+            let include_root_check =
+                gtk::CheckButton::with_label("This container backs / — I understand the system will not unlock again");
+            content.append(&include_root_check);
+
+            let button_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            button_row.set_halign(gtk::Align::End);
+            let cancel_btn = gtk::Button::with_label("Cancel");
+            let erase_btn = gtk::Button::with_label("Erase keyslots");
+            erase_btn.add_css_class("destructive-action");
+            erase_btn.set_sensitive(false);
+            button_row.append(&cancel_btn);
+            button_row.append(&erase_btn);
+            content.append(&button_row);
+            dialog.set_child(Some(&content));
+
+            entry.connect_changed({
+                let erase_btn = erase_btn.clone();
+                let device = device.clone();
+                move |e| erase_btn.set_sensitive(e.text().as_str() == device)
+            });
+            cancel_btn.connect_clicked({
+                let dialog = dialog.clone();
+                move |_| dialog.close()
+            });
+            erase_btn.connect_clicked({
+                let dialog = dialog.clone();
+                let luks_nuke_status_label = luks_nuke_status_label.clone();
+                let include_root_check = include_root_check.clone();
+                let device = device.clone();
+                move |_| {
+                    let include_root = include_root_check.is_active();
+                    dialog.close();
+                    luks_nuke_status_label.set_label(&format!("Erasing keyslots of /dev/{device}…"));
+                    let luks_nuke_status_label = luks_nuke_status_label.clone();
+                    let apply: LuksNukeApplyFn = Rc::new(move |result| match result {
+                        Ok(res) => {
+                            let mut text = res.message.clone();
+                            if !res.warnings.is_empty() {
+                                text.push('\n');
+                                text.push_str(&res.warnings.join("\n"));
+                            }
+                            if !res.complete {
+                                text.insert_str(0, "INCOMPLETE — ");
+                            }
+                            luks_nuke_status_label.set_label(&text);
+                        }
+                        Err(e) => luks_nuke_status_label.set_label(&format!("error: {e}")),
+                    });
+                    let device = device.clone();
+                    run_on_background(
+                        (device, include_root),
+                        |(device, include_root)| wipe::luks_nuke(&device, include_root),
+                        apply,
+                    );
+                }
+            });
+            dialog.present();
         }
     });
 

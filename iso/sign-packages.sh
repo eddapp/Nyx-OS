@@ -225,16 +225,127 @@ write_and_sign_build_manifest() {
     build_ts="$(date -u -d "@${epoch}" '+%Y-%m-%dT%H:%M:%SZ')"
     manifest_file="$out_dir/${iso_basename}.manifest"
 
+    local canary_sha256
+    canary_sha256="$(sha256sum "$REPO_ROOT/CANARY.md" | awk '{print $1}')"
+
     cat > "$manifest_file" <<EOF
 filename=$iso_basename
 size_bytes=$iso_size
 sha256=$iso_sha256
 git_commit=$git_commit
 build_timestamp_utc=$build_ts
+canary_sha256=$canary_sha256
 EOF
 
     GNUPGHOME="$NYX_GPG_HOME" gpg --batch --yes --armor --detach-sign \
         -u "$NYX_SIGN_KEY_FPR" -o "${manifest_file}.asc" "$manifest_file"
 
     echo "sign-packages: wrote signed build manifest $manifest_file (+ ${manifest_file}.asc)"
+}
+
+# sign_canary <airootfs_dir> <out_dir>
+#
+# Signs the repository's warrant canary (CANARY.md at the repo root) with
+# the same build-signing key the packages/manifest use, then stages the
+# statement, its detached ASCII-armored signature, and the public key into
+# <airootfs_dir>/usr/share/nyxos/ so they ship inside the ISO, and copies
+# the same three files next to the ISO in <out_dir> for anyone verifying
+# before they boot. The staged airootfs files are build products, not
+# source (see .gitignore) -- CANARY.md itself is the only checked-in piece.
+# The manifest written by write_and_sign_build_manifest also records the
+# canary's sha256, so a given ISO is bound to exactly one statement.
+sign_canary() {
+    local airootfs_dir="${1:-}" out_dir="${2:-}"
+    [[ -n "$airootfs_dir" && -d "$airootfs_dir" && -n "$out_dir" ]] || {
+        echo "sign_canary: usage: sign_canary <airootfs_dir> <out_dir>" >&2
+        return 1
+    }
+    [[ -n "$NYX_SIGN_KEY_FPR" ]] || {
+        echo "sign_canary: NYX_SIGN_KEY_FPR is empty -- call ensure_nyx_signing_key first" >&2
+        return 1
+    }
+    local canary="$REPO_ROOT/CANARY.md"
+    [[ -f "$canary" ]] || {
+        echo "sign_canary: $canary not found" >&2
+        return 1
+    }
+
+    local stage="$airootfs_dir/usr/share/nyxos"
+    mkdir -p "$stage" "$out_dir"
+    cp -f "$canary" "$stage/CANARY.md"
+    GNUPGHOME="$NYX_GPG_HOME" gpg --batch --yes --armor --detach-sign \
+        -u "$NYX_SIGN_KEY_FPR" -o "$stage/CANARY.md.asc" "$stage/CANARY.md"
+    GNUPGHOME="$NYX_GPG_HOME" gpg --batch --yes --armor --export "$NYX_SIGN_KEY_FPR" \
+        > "$stage/nyxos-build-signing-key.asc"
+    # Verify what was just staged with a throwaway keyring holding only the
+    # exported public key -- proves the shipped key/signature pair works
+    # for a user who has nothing else.
+    local verify_home
+    verify_home="$(mktemp -d)"
+    GNUPGHOME="$verify_home" gpg --batch --quiet --import "$stage/nyxos-build-signing-key.asc" 2>/dev/null
+    if ! GNUPGHOME="$verify_home" gpg --batch --quiet --verify "$stage/CANARY.md.asc" "$stage/CANARY.md" 2>/dev/null; then
+        rm -rf "$verify_home"
+        echo "sign_canary: staged canary signature does not verify with the exported public key" >&2
+        return 1
+    fi
+    rm -rf "$verify_home"
+
+    cp -f "$stage/CANARY.md" "$stage/CANARY.md.asc" "$stage/nyxos-build-signing-key.asc" "$out_dir/"
+    echo "sign-packages: signed warrant canary staged at $stage and copied to $out_dir"
+}
+
+# stage_nyx_keyring <airootfs_dir>
+#
+# Writes the NyxOS build-signing public key in pacman's keyring-package
+# format (the same three-file layout archlinux-keyring/blackarch-keyring
+# use: <name>.gpg binary export, <name>-trusted with "FPR:4:" lines,
+# <name>-revoked) into <airootfs_dir>/usr/share/pacman/keyrings/, so the
+# live medium's pacman-init.service can `pacman-key --populate nyxos` and
+# thereby trust the signed [nyxos] repo shipped on the medium. The
+# installer's post-install step copies the same files onto the installed
+# system. Build products, not source (see .gitignore).
+stage_nyx_keyring() {
+    local airootfs_dir="${1:-}"
+    [[ -n "$airootfs_dir" && -d "$airootfs_dir" ]] || {
+        echo "stage_nyx_keyring: usage: stage_nyx_keyring <airootfs_dir>" >&2
+        return 1
+    }
+    [[ -n "$NYX_SIGN_KEY_FPR" ]] || {
+        echo "stage_nyx_keyring: NYX_SIGN_KEY_FPR is empty -- call ensure_nyx_signing_key first" >&2
+        return 1
+    }
+    local dir="$airootfs_dir/usr/share/pacman/keyrings"
+    mkdir -p "$dir"
+    GNUPGHOME="$NYX_GPG_HOME" gpg --batch --yes --export "$NYX_SIGN_KEY_FPR" > "$dir/nyxos.gpg"
+    printf '%s:4:\n' "$NYX_SIGN_KEY_FPR" > "$dir/nyxos-trusted"
+    : > "$dir/nyxos-revoked"
+    echo "sign-packages: staged nyxos pacman keyring in $dir"
+}
+
+# stage_nyx_repo_in_airootfs <local_repo_dir> <airootfs_dir>
+#
+# Copies the signed local repo (every *.pkg.tar.zst + .sig, plus the signed
+# nyxos.db/nyxos.files and their symlinks) to <airootfs_dir>/opt/nyxos/repo,
+# which is where the live medium's /etc/pacman.conf [nyxos] block points.
+# Must run after sign_nyx_packages/sign_nyx_repo_db and before mkarchiso.
+# Build products, not source (see .gitignore).
+stage_nyx_repo_in_airootfs() {
+    local local_repo_dir="${1:-}" airootfs_dir="${2:-}"
+    [[ -n "$local_repo_dir" && -d "$local_repo_dir" && -n "$airootfs_dir" && -d "$airootfs_dir" ]] || {
+        echo "stage_nyx_repo_in_airootfs: usage: stage_nyx_repo_in_airootfs <local_repo_dir> <airootfs_dir>" >&2
+        return 1
+    }
+    local dest="$airootfs_dir/opt/nyxos/repo"
+    rm -rf "$dest"
+    mkdir -p "$dest"
+    local f
+    for f in "$local_repo_dir"/*.pkg.tar.zst "$local_repo_dir"/*.pkg.tar.zst.sig \
+             "$local_repo_dir"/nyxos.db "$local_repo_dir"/nyxos.db.tar.gz "$local_repo_dir"/nyxos.db.sig "$local_repo_dir"/nyxos.db.tar.gz.sig \
+             "$local_repo_dir"/nyxos.files "$local_repo_dir"/nyxos.files.tar.gz "$local_repo_dir"/nyxos.files.sig "$local_repo_dir"/nyxos.files.tar.gz.sig; do
+        [[ -e "$f" || -L "$f" ]] && cp -a -- "$f" "$dest/"
+    done
+    local n
+    n="$(find "$dest" -name '*.pkg.tar.zst' | wc -l)"
+    [[ "$n" -gt 0 ]] || { echo "stage_nyx_repo_in_airootfs: no packages found in $local_repo_dir" >&2; return 1; }
+    echo "sign-packages: staged $n package(s) into $dest"
 }

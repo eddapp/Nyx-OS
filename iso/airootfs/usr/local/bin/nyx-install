@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# nyx-install — installs NyxOS from the live medium onto a disk.
+#
+# This is a thin, honest wrapper around Arch's own `archinstall` (the
+# text-mode installer shipped on every Arch ISO). It does exactly three
+# things archinstall cannot know about on its own:
+#
+#   1. Feeds it NyxOS's curated package set (a copy of the ISO's own
+#      packages.x86_64, minus the handful of live-medium-only packages), so
+#      the installed system gets the same Nyx daemons, dashboard, browsers,
+#      privacy stack and tooling the live session has — resolved from the
+#      signed [nyxos] repo that ships on this medium (/opt/nyxos/repo) plus
+#      the normal Arch/BlackArch mirrors.
+#   2. Pre-fills the parts of the archinstall menu that define NyxOS
+#      (Xfce4 + LightDM, NetworkManager, PipeWire, the `linux` kernel, the
+#      Nyx services to enable). Everything machine-specific — disk layout,
+#      encryption, bootloader, hostname, users, root password, timezone,
+#      locale, mirrors — is left for you to set in archinstall's menu.
+#   3. Registers a post-install step (nyxos-postinstall.sh) that archinstall
+#      runs inside the freshly installed system, which copies the NyxOS
+#      configuration the live medium carries (nftables, Tor, DNSCrypt,
+#      NetworkManager DNS, polkit, AppArmor), the [nyxos] repo and its
+#      keyring, and adds the AppArmor LSM kernel parameters.
+#
+# Usage: sudo nyx-install            (or the "Install NyxOS" menu entry)
+#        NYX_INSTALL_DRY_RUN=1 nyx-install   -- print the generated config only
+set -euo pipefail
+
+# NYX_INSTALL_ROOT lets the dry run be exercised against a checked-out
+# iso/airootfs tree on a dev machine; it is empty on the live medium.
+PKGLIST="${NYX_INSTALL_ROOT:-}/usr/share/nyxos/installer/packages.x86_64"
+POSTINSTALL="${NYX_INSTALL_ROOT:-}/usr/share/nyxos/installer/nyxos-postinstall.sh"
+# Inside archinstall's chroot the live root is reachable at this path
+# (arch-chroot bind-mounts /run, and archiso mounts the airootfs image
+# under /run/archiso/airootfs) — see nyxos-postinstall.sh.
+POSTINSTALL_IN_CHROOT="/run/archiso/airootfs/usr/share/nyxos/installer/nyxos-postinstall.sh"
+CONFIG=/tmp/nyxos-archinstall.json
+
+die() { echo "nyx-install: $*" >&2; exit 1; }
+
+if [[ "${NYX_INSTALL_DRY_RUN:-0}" != "1" ]]; then
+    [[ "$EUID" -eq 0 ]] || exec sudo -- "$0" "$@"
+    [[ -d /run/archiso/airootfs ]] || die "not running from the NyxOS live medium (/run/archiso/airootfs missing)"
+    command -v archinstall >/dev/null || die "archinstall is not installed on this medium"
+fi
+[[ -r "$PKGLIST" ]] || die "$PKGLIST missing — the ISO was built without staging the package list (see iso/build.sh)"
+[[ -r "$POSTINSTALL" ]] || die "$POSTINSTALL missing"
+
+# Live-medium-only packages that must NOT go onto an installed system:
+# archiso's initramfs hooks, the ISO bootloader, and the installer itself.
+# grub/efibootmgr stay: archinstall installs whichever bootloader you pick,
+# and having grub present does no harm if you pick systemd-boot.
+LIVE_ONLY=(mkinitcpio-archiso syslinux archinstall arch-install-scripts)
+
+python3 - "$PKGLIST" "$POSTINSTALL_IN_CHROOT" "${LIVE_ONLY[@]}" > "$CONFIG" <<'PY'
+import json, sys
+pkglist, postinstall, *live_only = sys.argv[1:]
+live_only = set(live_only)
+packages = []
+with open(pkglist) as f:
+    for line in f:
+        name = line.split('#', 1)[0].strip()
+        if name and name not in live_only and name not in packages:
+            packages.append(name)
+config = {
+    "archinstall-language": "English",
+    "hostname": "nyxos",
+    "kernels": ["linux"],
+    "network_config": {"type": "nm"},
+    "audio_config": {"audio": "pipewire"},
+    "swap": {"enabled": True, "algorithm": "zstd"},
+    "ntp": True,
+    "timezone": "UTC",
+    "locale_config": {"kb_layout": "us", "sys_enc": "UTF-8", "sys_lang": "en_US"},
+    "profile_config": {
+        "profile": {"main": "Desktop", "details": ["Xfce4"]},
+        "greeter": "lightdm-gtk-greeter",
+        "gfx_driver": "All open-source",
+    },
+    "packages": packages,
+    # Same set the live medium enables (iso/airootfs/etc/systemd/system/
+    # multi-user.target.wants), minus sshd — an installed desktop should
+    # not listen on 22 unless its owner turns that on.
+    "services": [
+        "NetworkManager", "nftables", "dnscrypt-proxy", "apparmor",
+        "nyx-health", "nyx-vpn", "nyx-dns", "nyx-identity", "nyx-devices",
+        "nyx-integrity", "nyx-telemetry", "nyx-watch",
+    ],
+    "custom_commands": [f"bash {postinstall}"],
+}
+json.dump(config, sys.stdout, indent=2)
+PY
+
+if [[ "${NYX_INSTALL_DRY_RUN:-0}" == "1" ]]; then
+    cat "$CONFIG"; echo
+    exit 0
+fi
+
+cat <<EOF
+
+  NyxOS installer
+  ---------------
+  archinstall's menu will open with the NyxOS package set, desktop and
+  services pre-filled. You still have to set, in that menu:
+
+    * Disk configuration   (partitioning; optional LUKS encryption)
+    * Bootloader           (systemd-boot on UEFI, GRUB on BIOS)
+    * Authentication       (root password and/or a user in the wheel group)
+    * Hostname, timezone, locale, mirrors as you prefer
+
+  Then choose "Install". The NyxOS post-install step runs automatically
+  at the end. Generated config: $CONFIG
+
+EOF
+read -r -p "Press Enter to start archinstall (Ctrl-C to abort)… " _
+exec archinstall --config "$CONFIG"

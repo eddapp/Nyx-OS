@@ -1,0 +1,19 @@
+# Same shape as archiso's own releng profile, plus the BlackArch and NyxOS
+# keyrings so the live system can verify [blackarch] packages and the
+# signed [nyxos] repo shipped on this medium (/opt/nyxos/repo) — which is
+# what `nyx-install` needs to pacstrap NyxOS packages onto the target.
+[Unit]
+Description=Initializes Pacman keyring
+Requires=etc-pacman.d-gnupg.mount
+After=etc-pacman.d-gnupg.mount time-sync.target
+BindsTo=etc-pacman.d-gnupg.mount
+Before=archlinux-keyring-wkd-sync.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/pacman-key --init
+ExecStart=/usr/bin/pacman-key --populate archlinux blackarch nyxos
+
+[Install]
+WantedBy=multi-user.target

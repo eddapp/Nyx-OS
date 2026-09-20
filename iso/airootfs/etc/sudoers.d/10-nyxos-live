@@ -1,0 +1,6 @@
+# NyxOS LIVE MEDIUM ONLY. Kodachi's live-session trust model: the live user
+# is root-equivalent without a prompt, matching what the dashboard's polkit
+# rule (90-nyx-dashboard.rules) already assumes of wheel. The installer's
+# post-install step deliberately does NOT copy this file — an installed
+# NyxOS keeps archinstall's password-prompting wheel rule.
+%wheel ALL=(ALL:ALL) NOPASSWD: ALL

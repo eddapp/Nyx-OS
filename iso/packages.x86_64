@@ -53,6 +53,11 @@ curl
 tor
 dnscrypt-proxy
 
+# --- BlackArch signing keys, so the live medium's pacman-init.service can
+# `pacman-key --populate blackarch` and verify [blackarch] packages (the
+# NyxOS key comes from the nyxos keyring staged by iso/build.sh). ---
+blackarch-keyring
+
 # --- Secure communications: onion-routed messenger + anonymous file
 # sharing. Both real, independent projects (not NyxOS-authored) —
 # onionshare ships directly from Arch's own 'extra' repo; session-desktop

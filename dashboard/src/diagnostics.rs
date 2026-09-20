@@ -15,6 +15,7 @@ const BINARY: &str = "nyx-diagnostics";
 
 #[derive(Deserialize)]
 struct NetworkDump {
+    interfaces: String,
     routes: String,
 }
 
@@ -22,6 +23,10 @@ struct NetworkDump {
 pub struct DefaultRoute {
     pub interface: Option<String>,
     pub gateway: Option<String>,
+    /// First IPv4 address (without prefix length) configured on
+    /// `interface`, from the same `nyx-diagnostics network` dump's
+    /// `ip -o addr show` output.
+    pub address: Option<String>,
 }
 
 #[derive(Deserialize, Default, Clone)]
@@ -75,9 +80,25 @@ fn parse_default_route(routes_text: &str) -> DefaultRoute {
             tokens.iter().position(|t| *t == "dev").and_then(|i| tokens.get(i + 1)).map(|s| s.to_string());
         let gateway =
             tokens.iter().position(|t| *t == "via").and_then(|i| tokens.get(i + 1)).map(|s| s.to_string());
-        return DefaultRoute { interface, gateway };
+        return DefaultRoute { interface, gateway, address: None };
     }
     DefaultRoute::default()
+}
+
+/// `ip -o addr show` prints one line per address:
+/// `2: wlan0    inet 192.168.1.5/24 brd 192.168.1.255 scope global ...`.
+/// Returns the first `inet` (IPv4) address on `interface`, prefix stripped.
+fn parse_interface_ipv4(interfaces_text: &str, interface: &str) -> Option<String> {
+    for line in interfaces_text.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.get(1) != Some(&interface) {
+            continue;
+        }
+        if let Some(i) = tokens.iter().position(|t| *t == "inet") {
+            return tokens.get(i + 1).map(|a| a.split('/').next().unwrap_or(a).to_string());
+        }
+    }
+    None
 }
 
 /// Interface/gateway of the current IPv4 default route, via
@@ -85,7 +106,11 @@ fn parse_default_route(routes_text: &str) -> DefaultRoute {
 /// unprivileged `ip route show` — no external service involved).
 pub fn fetch_default_route() -> Result<DefaultRoute, String> {
     let dump: NetworkDump = run_json(&["network"])?;
-    Ok(parse_default_route(&dump.routes))
+    let mut route = parse_default_route(&dump.routes);
+    if let Some(iface) = &route.interface {
+        route.address = parse_interface_ipv4(&dump.interfaces, iface);
+    }
+    Ok(route)
 }
 
 /// Runs exactly one `nyx-diagnostics public-ip --yes` — one outbound

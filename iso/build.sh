@@ -87,10 +87,14 @@ PACKAGES_FILE="$PROFILE_DIR/packages.x86_64"
 PACKAGES_BACKUP="$PROFILE_DIR/.packages.x86_64.desktop-orig"
 DEFAULT_TARGET_LINK="$PROFILE_DIR/airootfs/etc/systemd/system/default.target"
 DISPLAY_MANAGER_LINK="$PROFILE_DIR/airootfs/etc/systemd/system/display-manager.service"
+GETTY_AUTOLOGIN_DIR="$PROFILE_DIR/airootfs/etc/systemd/system/getty@tty1.service.d"
 SWAPPED_PROFILE_FILES=0
 
 restore_profile_files() {
     [[ "$SWAPPED_PROFILE_FILES" -eq 1 ]] || return 0
+
+    # Server-only console autologin drop-in (see the server branch below).
+    rm -rf "$GETTY_AUTOLOGIN_DIR"
 
     if [[ -f "$PACKAGES_BACKUP" ]]; then
         mv -f "$PACKAGES_BACKUP" "$PACKAGES_FILE"
@@ -121,6 +125,18 @@ if [[ "$PROFILE" == "server" ]]; then
     # it dangling.
     ln -sfn /usr/lib/systemd/system/multi-user.target "$DEFAULT_TARGET_LINK"
     rm -f "$DISPLAY_MANAGER_LINK"
+
+    # No LightDM on the server profile, so the live user is logged in on
+    # tty1 by agetty instead (same mechanism archiso's own releng profile
+    # uses for root). Desktop builds never get this: LightDM's autologin
+    # (airootfs/etc/lightdm/lightdm.conf.d) covers them, and an extra
+    # logged-in console on tty1 behind the greeter would be a hole.
+    mkdir -p "$GETTY_AUTOLOGIN_DIR"
+    cat > "$GETTY_AUTOLOGIN_DIR/autologin.conf" <<'EOF'
+[Service]
+ExecStart=
+ExecStart=-/usr/bin/agetty --noreset --noclear --autologin nyx - ${TERM}
+EOF
 fi
 
 for tool_pkg in archiso:mkarchiso pacman-contrib:repo-add; do
@@ -208,6 +224,21 @@ EOF
 export SOURCE_DATE_EPOCH="$(git -C "$REPO_ROOT" log -1 --format=%ct)"
 
 mkdir -p "$OUT_DIR"
+# --- Warrant canary: sign CANARY.md with the build key and stage it (plus
+# the public key) into airootfs so it ships on the image, and into $OUT_DIR
+# beside the ISO. Must run before mkarchiso copies airootfs. ---
+sign_canary "$PROFILE_DIR/airootfs" "$OUT_DIR"
+
+# --- Ship the signed [nyxos] repo and its pacman keyring on the medium
+# (airootfs/opt/nyxos/repo + usr/share/pacman/keyrings/nyxos*), which is
+# what airootfs/etc/pacman.conf's [nyxos] block and pacman-init.service
+# expect, and what nyx-install needs to put NyxOS packages on a target
+# disk. Also stage the curated package list nyx-install feeds archinstall.
+# All three are build products (gitignored). ---
+stage_nyx_keyring "$PROFILE_DIR/airootfs"
+stage_nyx_repo_in_airootfs "$LOCAL_REPO_DIR" "$PROFILE_DIR/airootfs"
+install -Dm644 "$PACKAGES_FILE" "$PROFILE_DIR/airootfs/usr/share/nyxos/installer/packages.x86_64"
+
 sudo --preserve-env=SOURCE_DATE_EPOCH mkarchiso -v -C "$BUILD_PACMAN_CONF" -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
 
 # --- Locate the ISO mkarchiso just wrote. Its filename embeds

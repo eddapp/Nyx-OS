@@ -15,6 +15,20 @@
 # personal ~/.gnupg and never to be committed.
 /iso/nyx-signing-gpg/
 
+# signed warrant canary staged into the ISO by iso/sign-packages.sh
+# (sign_canary) at build time -- CANARY.md at the repo root is the source
+/iso/airootfs/usr/share/nyxos/CANARY.md
+/iso/airootfs/usr/share/nyxos/CANARY.md.asc
+/iso/airootfs/usr/share/nyxos/nyxos-build-signing-key.asc
+
+# staged at build time by iso/build.sh: the signed [nyxos] repo, its pacman
+# keyring, the installer's package-list copy, and the server profile's
+# console-autologin drop-in
+/iso/airootfs/opt/nyxos/repo/
+/iso/airootfs/usr/share/pacman/keyrings/
+/iso/airootfs/usr/share/nyxos/installer/packages.x86_64
+/iso/airootfs/etc/systemd/system/getty@tty1.service.d/
+
 # built OS images (too large for git; build artifacts, not source)
 /archlinux/
 *.iso

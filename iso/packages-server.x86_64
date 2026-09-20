@@ -61,6 +61,11 @@ curl
 tor
 dnscrypt-proxy
 
+# --- BlackArch signing keys, so the live medium's pacman-init.service can
+# `pacman-key --populate blackarch` and verify [blackarch] packages (the
+# NyxOS key comes from the nyxos keyring staged by iso/build.sh). ---
+blackarch-keyring
+
 # --- Second anonymity network, alongside Tor. Headless-friendly (i2pd is a
 # routing daemon, no GUI needed); not enabled by default, same reasoning as
 # the desktop profile. ---

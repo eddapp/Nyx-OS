@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Install NyxOS
+Comment=Install NyxOS to a disk (archinstall with the NyxOS package set and configuration)
+Exec=xfce4-terminal --title="Install NyxOS" -e "sudo /usr/local/bin/nyx-install"
+Icon=system-software-install
+Terminal=false
+Categories=System;

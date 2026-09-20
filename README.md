@@ -26,6 +26,10 @@ Core architecture, security boundaries, networking, desktop integration, and the
 
 Features documented below represent the intended NyxOS platform architecture and feature-parity targets.
 
+**Build and install:** see [`docs/INSTALL.md`](docs/INSTALL.md) for building the ISO (`iso/build.sh`), the live session (user `nyx`, password `nyxos`), and installing to disk with `nyx-install`.
+
+**Warrant canary:** [`CANARY.md`](CANARY.md) is the current signed statement. Every ISO ships it, signed, at `/usr/share/nyxos/` together with the build-signing public key, and the ISO's build manifest records its hash. See the file for the verification steps and the date after which it should be considered expired.
+
 ---
 
 # What is NyxOS?

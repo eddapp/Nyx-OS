@@ -2,6 +2,7 @@ mod client;
 mod diagnostics;
 mod schedule;
 mod ui;
+mod wipe;
 mod workflow;
 
 use gtk::glib;

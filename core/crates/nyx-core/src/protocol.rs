@@ -344,8 +344,10 @@ pub enum FreeProvider {
 /// A commercial VPN provider NyxOS cannot embed a real paid account for —
 /// but can still write a real, correctly-shaped config skeleton for, with
 /// an obvious placeholder over exactly the field(s) that need the user's
-/// own account. Deliberately just these three. See `nyx-vpn`'s `templates`
-/// module for the verified format details behind each.
+/// own account. Deliberately just these six — the subset of Kodachi's
+/// pre-loaded provider catalog whose config format NyxOS could verify
+/// against the provider's own public infrastructure. See `nyx-vpn`'s
+/// `templates` module for the verified format details behind each.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TemplateProvider {
@@ -366,6 +368,42 @@ pub enum TemplateProvider {
     /// separate per-account OpenVPN service credential (distinct from the
     /// account login), which is the placeholder here.
     NordVpn,
+    /// WireGuard skeleton — real shape confirmed against IVPN's own public,
+    /// unauthenticated server directory (`api.ivpn.net/v4/servers.json`,
+    /// which lists every WireGuard host's hostname and public key) and
+    /// IVPN's own Linux WireGuard guide: internal resolver `172.16.0.1`,
+    /// endpoint hostnames `<cc><n>.wg.ivpn.net`, port `2049` (one of the
+    /// ten UDP ports IVPN documents). `PrivateKey` and the account-assigned
+    /// tunnel `Address` are the placeholders.
+    Ivpn,
+    /// OpenVPN skeleton — Private Internet Access publishes its complete
+    /// OpenVPN config bundle with no login (`privateinternetaccess.com/
+    /// openvpn/openvpn-strong.zip`): the `<ca>` block and the
+    /// `<cc>.privacy.network:1197` endpoint shape are real shared
+    /// infrastructure. Only the per-account username/password is the
+    /// placeholder.
+    PrivateInternetAccess,
+    /// OpenVPN skeleton — Surfshark publishes every server's `.ovpn` with
+    /// no login (`my.surfshark.com/vpn/api/v1/server/configurations`), all
+    /// sharing one `<ca>`/`<tls-auth>` pair, so both are real here. Only the
+    /// per-account OpenVPN service credential (distinct from the account
+    /// login) is the placeholder.
+    Surfshark,
+}
+
+impl TemplateProvider {
+    /// Which backend the provider's skeleton is written for — the single
+    /// source of truth shared by `nyx-vpn`'s template writer (which picks
+    /// the profile directory from it) and the dashboard (which decides
+    /// whether the currently visible profile list needs refreshing).
+    pub fn protocol(self) -> VpnProtocol {
+        match self {
+            Self::Mullvad | Self::Ivpn => VpnProtocol::WireGuard,
+            Self::ProtonVpn | Self::NordVpn | Self::PrivateInternetAccess | Self::Surfshark => {
+                VpnProtocol::OpenVpn
+            }
+        }
+    }
 }
 
 /// An upstream SOCKS5 proxy — in practice always Tor's SocksPort
