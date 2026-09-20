@@ -111,6 +111,23 @@ build_aur_packages() {
             git clone --quiet "https://aur.archlinux.org/${pkg}.git" "$pkg_dir"
         fi
 
+        # Import whatever PGP keys this PKGBUILD's validpgpkeys names into
+        # the building user's keyring before makepkg verifies the sources —
+        # the same step every AUR helper performs. makepkg would otherwise
+        # fail on any package with a signed tarball or git tag (oniux's tag
+        # is signed by two Tor Project maintainers). Deliberately not
+        # --skippgpcheck: a missing key is fixed by fetching it, never by
+        # turning the check off. Two keyservers because keys.openpgp.org
+        # only serves what its owner has published there.
+        local key
+        while IFS= read -r key; do
+            [[ -n "$key" ]] || continue
+            gpg --batch --list-keys "$key" &>/dev/null && continue
+            gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$key" &>/dev/null \
+                || gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys "$key" &>/dev/null \
+                || echo "build_aur_packages: warning: could not fetch PGP key $key for $pkg" >&2
+        done < <(cd "$pkg_dir" && bash -c 'source ./PKGBUILD 2>/dev/null; printf "%s\n" "${validpgpkeys[@]:-}"')
+
         # -s/--syncdeps beyond build.sh's own "-f --noconfirm" convention:
         # NYX_PACKAGES' makedepends are all already covered by
         # packages.x86_64/the build host, but an AUR PKGBUILD's makedepends

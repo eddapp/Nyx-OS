@@ -7,6 +7,7 @@
 # archiso build output
 /iso/work/
 /iso/out/
+/iso/aur-work/
 /iso/local-repo/
 /iso/pacman.conf.local
 

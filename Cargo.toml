@@ -1,5 +1,10 @@
 [workspace]
 resolver = "2"
+# iso/ holds build scratch space (iso/aur-work: AUR checkouts such as oniux,
+# which is itself a cargo project). Without this, cargo walks up from those
+# manifests, finds this workspace, and refuses to build them ("current
+# package believes it's in a workspace when it's not").
+exclude = ["iso"]
 members = [
     "core/crates/nyx-core",
     "core/crates/nyx-health",

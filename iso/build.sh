@@ -166,8 +166,13 @@ trust_nyx_signing_key_on_host
 
 # --- Build NyxOS's own packages and index them into a local file:// repo ---
 mkdir -p "$LOCAL_REPO_DIR"
+# --nodeps: makepkg would otherwise insist every *runtime* dependency be
+# installed on the build host, and several of nyx-vpn's (amneziawg-*,
+# hysteria-bin, cloak-obfuscation-bin, mieru) are AUR/local packages that
+# only need to exist inside the ISO, where pacstrap resolves them from the
+# same [nyxos] repo. The only real build-time need is cargo, checked above.
 for pkg in "${NYX_PACKAGES[@]}"; do
-    (cd "$PKGBUILD_DIR/$pkg" && PKGDEST="$LOCAL_REPO_DIR" makepkg -f --noconfirm)
+    (cd "$PKGBUILD_DIR/$pkg" && PKGDEST="$LOCAL_REPO_DIR" makepkg -f --nodeps --noconfirm)
 done
 repo-add "$LOCAL_REPO_DIR/nyxos.db.tar.gz" "$LOCAL_REPO_DIR"/*.pkg.tar.zst
 
