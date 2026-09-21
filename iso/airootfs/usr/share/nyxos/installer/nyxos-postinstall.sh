@@ -55,7 +55,7 @@ if ! grep -q '^\[nyxos\]' /etc/pacman.conf; then
     log "added [nyxos] to /etc/pacman.conf"
 fi
 if ! grep -q '^\[blackarch\]' /etc/pacman.conf; then
-    printf '\n[blackarch]\nSigLevel = Required DatabaseOptional\nServer = https://blackarch.org/blackarch/$repo/os/$arch\n' >> /etc/pacman.conf
+    printf '\n[blackarch]\nSigLevel = Required DatabaseOptional\nServer = https://ca.mirrors.cicku.me/blackarch/$repo/os/$arch\nServer = https://mirror.cyberbits.eu/blackarch/$repo/os/$arch\nServer = https://blackarch.org/blackarch/$repo/os/$arch\n' >> /etc/pacman.conf
     log "added [blackarch] to /etc/pacman.conf"
 fi
 mkdir -p /usr/share/pacman/keyrings

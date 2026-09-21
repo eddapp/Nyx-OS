@@ -111,6 +111,28 @@ build_aur_packages() {
             git clone --quiet "https://aur.archlinux.org/${pkg}.git" "$pkg_dir"
         fi
 
+        # Skip the (re)build when this exact pkgname-pkgver-pkgrel is already
+        # sitting in the local repo from an earlier run — AUR sources are
+        # pinned by version, so a same-version rebuild is byte-for-byte
+        # wasted work (session-desktop alone is a ~20 minute Electron build,
+        # and an ISO build that fails later in mkarchiso should not have to
+        # pay that again). AUR_PACKAGES_CLEAN=1 forces a fresh build.
+        if [[ "${AUR_PACKAGES_CLEAN:-0}" != "1" ]]; then
+            local srcinfo built_name built_ver built_rel built_epoch existing
+            srcinfo="$(cd "$pkg_dir" && makepkg --printsrcinfo 2>/dev/null || true)"
+            built_name="$(awk '$1=="pkgname"{print $3; exit}' <<<"$srcinfo")"
+            built_ver="$(awk '$1=="pkgver"{print $3; exit}' <<<"$srcinfo")"
+            built_rel="$(awk '$1=="pkgrel"{print $3; exit}' <<<"$srcinfo")"
+            built_epoch="$(awk '$1=="epoch"{print $3; exit}' <<<"$srcinfo")"
+            if [[ -n "$built_name" && -n "$built_ver" && -n "$built_rel" ]]; then
+                existing="$local_repo_dir/${built_name}-${built_epoch:+${built_epoch}:}${built_ver}-${built_rel}-"
+                if compgen -G "${existing}*.pkg.tar.zst" >/dev/null; then
+                    echo "build_aur_packages: $built_name ${built_ver}-${built_rel} already built in $local_repo_dir, skipping (AUR_PACKAGES_CLEAN=1 to force)"
+                    continue
+                fi
+            fi
+        fi
+
         # Import whatever PGP keys this PKGBUILD's validpgpkeys names into
         # the building user's keyring before makepkg verifies the sources —
         # the same step every AUR helper performs. makepkg would otherwise
