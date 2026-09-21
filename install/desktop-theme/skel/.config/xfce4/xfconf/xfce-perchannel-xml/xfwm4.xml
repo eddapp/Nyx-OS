@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="Materia-dark"/>
+    <property name="title_font" type="string" value="Noto Sans Bold 9"/>
+    <property name="button_layout" type="string" value="O|HMC"/>
+    <property name="workspace_count" type="int" value="2"/>
+    <property name="use_compositing" type="bool" value="true"/>
+    <property name="show_frame_shadow" type="bool" value="true"/>
+    <property name="show_popup_shadow" type="bool" value="true"/>
+    <property name="placement_mode" type="string" value="center"/>
+  </property>
+</channel>

@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  NyxOS default Thunar custom actions. Installed system-wide at
-  /etc/xdg/Thunar/uca.xml, which Thunar merges with (and lets the user
-  override in) their own ~/.config/Thunar/uca.xml.
+  NyxOS default Thunar custom actions. Shipped by nyx-thunar-integration as
+  /etc/skel/.config/Thunar/uca.xml, so every new user starts with it as
+  their own ~/.config/Thunar/uca.xml. Thunar loads exactly one uca.xml (the
+  user's, else /etc/xdg/Thunar's) and never merges them, which is why the
+  stock "Open Terminal Here" action is carried here too, and why this file
+  can't live at /etc/xdg/Thunar/uca.xml (the thunar package owns that path).
 
   Every destructive action here delegates to a reviewed Nyx binary
   (nyx-wipe, nyx-isolation) or a well-known tool (mat2, sha256sum, pkexec)
@@ -10,6 +13,17 @@
   install/thunar/nyx-thunar-*.sh, which are UI glue only.
 -->
 <actions>
+  <action>
+    <icon>utilities-terminal</icon>
+    <name>Open Terminal Here</name>
+    <unique-id>org.nyxos.thunar.open-terminal-1</unique-id>
+    <command>exo-open --working-directory %f --launch TerminalEmulator</command>
+    <description>Open a terminal in this folder</description>
+    <patterns>*</patterns>
+    <startup-notify/>
+    <directories/>
+  </action>
+
   <action>
     <icon>edit-delete</icon>
     <name>NyxOS Secure Wipe</name>

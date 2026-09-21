@@ -16,8 +16,14 @@ _repo_root="$startdir/../../.."
 _thunar_dir="$_repo_root/install/thunar"
 
 package() {
+  # Not /etc/xdg/Thunar/uca.xml: the thunar package owns that file and pacman
+  # refuses to let two packages own one path. Thunar loads a single uca.xml
+  # (~/.config first, else /etc/xdg) with no merging, so seeding each new
+  # user's ~/.config via /etc/skel is the supported override point; mkarchiso
+  # copies skel into the live user's home and archinstall's useradd -m does
+  # the same for installed users.
   install -Dm644 "$_thunar_dir/uca.xml" \
-    "$pkgdir/etc/xdg/Thunar/uca.xml"
+    "$pkgdir/etc/skel/.config/Thunar/uca.xml"
 
   install -Dm644 "$_thunar_dir/nyx-thunar-common.sh" \
     "$pkgdir/usr/lib/nyx/thunar/nyx-thunar-common.sh"

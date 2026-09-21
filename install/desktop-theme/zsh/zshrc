@@ -1,0 +1,60 @@
+# NyxOS system-wide zsh configuration (/etc/zsh/zshrc, from
+# nyx-desktop-sessions). Sourced for every interactive zsh before the
+# user's own ~/.zshrc, which can override anything here.
+
+# --- Completion ---
+autoload -Uz compinit
+[ -d "${XDG_CACHE_HOME:-$HOME/.cache}/zsh" ] || mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}/zsh"
+compinit -d "${XDG_CACHE_HOME:-$HOME/.cache}/zsh/zcompdump"
+zstyle ':completion:*' menu select
+zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}' 'r:|=*' 'l:|=* r:|=*'
+zstyle ':completion:*' list-colors "${(s.:.)LS_COLORS}"
+zstyle ':completion:*' rehash true
+setopt complete_in_word always_to_end
+
+# --- History ---
+HISTFILE="$HOME/.zsh_history"
+HISTSIZE=10000
+SAVEHIST=10000
+setopt share_history hist_ignore_dups hist_ignore_space hist_reduce_blanks
+
+# --- Behaviour ---
+setopt auto_cd interactive_comments no_beep
+bindkey -e
+bindkey "${terminfo[khome]:-^[[H}" beginning-of-line
+bindkey "${terminfo[kend]:-^[[F}"  end-of-line
+bindkey "${terminfo[kdch1]:-^[[3~}" delete-char
+bindkey '^[[1;5C' forward-word
+bindkey '^[[1;5D' backward-word
+
+# --- Colours ---
+[ -x /usr/bin/dircolors ] && eval "$(dircolors -b)"
+alias ls='ls --color=auto'
+alias grep='grep --color=auto'
+alias ip='ip -color=auto'
+alias diff='diff --color=auto'
+
+# --- Prompt: two lines, NyxOS purple. nearcolor maps the hex colours onto
+# the closest of 256 on terminals without true colour (the Linux console). ---
+zmodload zsh/nearcolor 2>/dev/null
+setopt prompt_subst
+PROMPT=$'%F{#9b7bff}┌──(%F{#e6e8ef}%n%F{#6e7386}@%F{#e6e8ef}%m%F{#9b7bff})-[%F{#c8ccd4}%~%F{#9b7bff}]\n└─%(#.%F{#ff5c7a}#.%F{#c084fc}$)%f '
+RPROMPT='%(?..%F{#ff5c7a}✘ %?%f)'
+
+# Window title: user@host: dir
+case "$TERM" in
+    xterm*|rxvt*|alacritty|foot|tmux*|screen*)
+        precmd() { print -Pn '\e]0;%n@%m: %~\a'; } ;;
+esac
+
+# --- Plugins (zsh-autosuggestions, zsh-syntax-highlighting). Syntax
+# highlighting must be sourced last. ---
+if [ -r /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh ]; then
+    ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE='fg=#6e7386'
+    ZSH_AUTOSUGGEST_STRATEGY=(history completion)
+    . /usr/share/zsh/plugins/zsh-autosuggestions/zsh-autosuggestions.zsh
+fi
+if [ -r /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh ]; then
+    . /usr/share/zsh/plugins/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
+    ZSH_HIGHLIGHT_STYLES[comment]='fg=#6e7386'
+fi

@@ -87,4 +87,19 @@ fi
 #    owner who later enables autologin only has to join it.
 getent group autologin >/dev/null || groupadd -r autologin
 
+# 5. zsh is the NyxOS interactive shell (system-wide /etc/zsh/zshrc and the
+#    ~/.zshrc stub come from nyx-desktop-sessions). archinstall creates
+#    users with bash and does not expose the shell, so switch every human
+#    account it made and make zsh the default for accounts added later.
+#    root deliberately keeps bash.
+if [[ -x /usr/bin/zsh ]]; then
+    while IFS=: read -r name _ uid _ _ _ shell; do
+        (( uid >= 1000 && uid < 60000 )) || continue
+        case "$shell" in
+            */bash|*/sh) usermod -s /usr/bin/zsh "$name" && log "login shell for $name -> zsh" ;;
+        esac
+    done < /etc/passwd
+    [[ -f /etc/default/useradd ]] && sed -i 's|^SHELL=.*|SHELL=/usr/bin/zsh|' /etc/default/useradd
+fi
+
 log "done"

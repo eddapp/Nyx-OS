@@ -1,0 +1,14 @@
+button-icon=nyxos-emblem
+button-title=NyxOS
+show-button-title=false
+show-button-icon=true
+favorites=org.nyxos.Dashboard.desktop,org.nyxos.Browser.desktop,org.nyxos.TorBrowser.desktop,org.nyxos.OniuxBrowser.desktop,xfce4-terminal-emulator.desktop,thunar.desktop,org.keepassxc.KeePassXC.desktop,org.onionshare.OnionShare.desktop,session-desktop.desktop,veracrypt.desktop,org.wireshark.Wireshark.desktop
+recent=
+position-search-alternate=true
+position-commands-alternate=true
+launcher-show-name=true
+launcher-show-description=true
+launcher-icon-size=2
+category-icon-size=1
+menu-width=540
+menu-height=580

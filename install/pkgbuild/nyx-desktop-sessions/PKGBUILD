@@ -1,23 +1,69 @@
 # Maintainer: NyxOS
-# Packages the optional "Nyx Tiling" login session — XFCE's panel/settings/
-# file-manager pieces with i3 substituted for xfwm4 as the window manager.
-# No compilation. The default "Xfce Session" entry (xfwm4) ships from the
-# xfce4/lightdm packages themselves and is untouched by this package.
+# Packages the NyxOS desktop: the look-and-feel defaults (wallpaper, emblem
+# icons, GTK/xfwm4 theme selection, single top panel with Whisker menu,
+# terminal colours, LightDM greeter look, system-wide zsh) and the optional
+# "Nyx Tiling" login session (XFCE's panel/settings/file-manager pieces with
+# i3 substituted for xfwm4). No compilation. The default "Xfce Session"
+# entry (xfwm4) ships from the xfce4/lightdm packages themselves.
+#
+# Per-user XFCE defaults are seeded through /etc/skel/.config rather than
+# /etc/xdg: xfce4-settings and xfce4-panel own the system-wide files there
+# (xsettings.xml, panel/default.xml) and pacman will not let two packages
+# own one path. Every new user — the live user via mkarchiso's skel copy,
+# installed users via archinstall's useradd -m — starts with the NyxOS
+# desktop and remains free to change it.
 pkgname=nyx-desktop-sessions
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="NyxOS optional tiling login session (XFCE panel/utilities + i3 as window manager)"
+pkgdesc="NyxOS desktop look-and-feel defaults (wallpaper, theme, panel, terminal, greeter, zsh) plus the optional i3-based tiling login session"
 arch=('any')
 license=('MIT')
-depends=('i3-wm' 'i3status' 'i3lock' 'dmenu' 'polkit-gnome' 'xfce4-panel' 'xfce4-settings' 'thunar' 'lightdm')
+depends=('i3-wm' 'i3status' 'i3lock' 'dmenu' 'polkit-gnome'
+         'xfce4-panel' 'xfce4-settings' 'xfdesktop' 'xfconf' 'thunar' 'lightdm'
+         'xfce4-whiskermenu-plugin' 'xfce4-pulseaudio-plugin' 'xfce4-power-manager'
+         'xfce4-terminal' 'lightdm-gtk-greeter'
+         'materia-gtk-theme' 'papirus-icon-theme' 'ttf-jetbrains-mono' 'noto-fonts'
+         'zsh' 'zsh-autosuggestions' 'zsh-syntax-highlighting')
 
 _repo_root="$startdir/../../.."
 _session_dir="$_repo_root/install/desktop-sessions"
+_theme_dir="$_repo_root/install/desktop-theme"
 
 package() {
+  # Optional tiling session.
   install -Dm755 "$_session_dir/nyxos-tiling-session" \
     "$pkgdir/usr/lib/nyx/session/nyxos-tiling-session"
-
   install -Dm644 "$_session_dir/nyxos-tiling.desktop" \
     "$pkgdir/usr/share/xsessions/nyxos-tiling.desktop"
+
+  # Wallpaper and emblem icon (hicolor, so every icon theme inherits it).
+  install -Dm644 "$_theme_dir/backgrounds/nyxos-default.png" \
+    "$pkgdir/usr/share/backgrounds/nyxos/nyxos-default.png"
+  local s
+  for s in 32 48 64 96 128 256; do
+    install -Dm644 "$_theme_dir/icons/nyxos-emblem-$s.png" \
+      "$pkgdir/usr/share/icons/hicolor/${s}x${s}/apps/nyxos-emblem.png"
+  done
+
+  # Terminal colour scheme (selectable preset), greeter look (conf.d drop-in,
+  # the greeter package owns lightdm-gtk-greeter.conf itself), and the
+  # per-login backdrop helper for monitor connector names the skel defaults
+  # can't know in advance.
+  install -Dm644 "$_theme_dir/xfce4-terminal/nyxos.theme" \
+    "$pkgdir/usr/share/xfce4/terminal/colorschemes/nyxos.theme"
+  install -Dm644 "$_theme_dir/lightdm/50-nyxos.conf" \
+    "$pkgdir/etc/lightdm/lightdm-gtk-greeter.conf.d/50-nyxos.conf"
+  install -Dm755 "$_theme_dir/bin/nyxos-backdrop" \
+    "$pkgdir/usr/lib/nyx/desktop/nyxos-backdrop"
+  install -Dm644 "$_theme_dir/autostart/nyxos-backdrop.desktop" \
+    "$pkgdir/etc/xdg/autostart/nyxos-backdrop.desktop"
+
+  # Per-user defaults: XFCE channels, panel/Whisker menu, terminal, ~/.zshrc.
+  local f
+  while IFS= read -r f; do
+    install -Dm644 "$_theme_dir/skel/$f" "$pkgdir/etc/skel/$f"
+  done < <(cd "$_theme_dir/skel" && find . -type f | sed 's|^\./||')
+
+  # System-wide zsh (the zsh package ships only /etc/zsh/zprofile).
+  install -Dm644 "$_theme_dir/zsh/zshrc" "$pkgdir/etc/zsh/zshrc"
 }

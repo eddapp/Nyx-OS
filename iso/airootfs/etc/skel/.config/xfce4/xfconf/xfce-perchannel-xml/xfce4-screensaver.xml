@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Live medium only (airootfs, not packaged): a live demo session must
+     never idle-lock behind a password the person at the keyboard was never
+     told. Installed systems keep xfce4-screensaver's own defaults. -->
+<channel name="xfce4-screensaver" version="1.0">
+  <property name="saver" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="lock" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+</channel>

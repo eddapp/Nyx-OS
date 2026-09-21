@@ -103,9 +103,18 @@ build_aur_packages() {
         if [[ -d "$pkg_dir/.git" ]]; then
             # Idempotent re-run: update the existing checkout in place rather
             # than re-cloning (or erroring because the dir already exists).
-            git -C "$pkg_dir" fetch --quiet origin
-            git -C "$pkg_dir" reset --quiet --hard origin/HEAD
-            git -C "$pkg_dir" clean --quiet -fdx
+            # A failed fetch is not fatal here: the AUR drops HTTPS
+            # connections often enough to matter, and the checkout on disk
+            # is exactly what the last successful run built from, so fall
+            # back to it rather than let set -e end the whole ISO build over
+            # a network blip in a step whose usual outcome is "already
+            # built, skipping" below anyway.
+            if git -C "$pkg_dir" fetch --quiet origin; then
+                git -C "$pkg_dir" reset --quiet --hard origin/HEAD
+                git -C "$pkg_dir" clean --quiet -fdx
+            else
+                echo "build_aur_packages: warning: could not fetch $pkg from the AUR, using the existing checkout" >&2
+            fi
         else
             rm -rf "$pkg_dir"
             git clone --quiet "https://aur.archlinux.org/${pkg}.git" "$pkg_dir"

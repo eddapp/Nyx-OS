@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=NyxOS Backdrop
+Comment=Set the NyxOS wallpaper for monitors that have no backdrop configured yet
+Exec=/usr/lib/nyx/desktop/nyxos-backdrop
+OnlyShowIn=XFCE;
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

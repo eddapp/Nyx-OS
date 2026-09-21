@@ -105,14 +105,32 @@ apparmor
 # source at ISO-build time regardless of which profile is selected.
 rust
 
-# --- BlackArch: anonymity / anti-forensics / crypto tooling ---
-blackarch-anti-forensic
-blackarch-crypto
-blackarch-proxy
-blackarch-spoof
-blackarch-sniffer
-blackarch-networking
-blackarch-forensic
+# --- Interactive shell: zsh plus the two plugins. The desktop profile's
+# /etc/zsh/zshrc (nyx-desktop-sessions, GUI-only, not on this profile)
+# wires them up; here they are available to a user's own ~/.zshrc. ---
+zsh
+zsh-autosuggestions
+zsh-syntax-highlighting
+
+# --- BlackArch/extra: networking, sniffing, spoofing, proxying, crypto
+# attack, and disk forensics essentials. Named individual tools, not the
+# blackarch-networking/sniffer/spoof/proxy/crypto/forensic/anti-forensic
+# groups (each pulls in hundreds of packages) — same "named tools, not whole
+# groups" reasoning as the wireless/blue-team section below, applied
+# consistently here instead of contradicting it. Matches how Kali's own
+# default/live toolset is curated, not a full category dump. Anti-forensic
+# needs are already covered by wipe/secure-delete/gocryptfs/veracrypt/mat2
+# above, so no separate package is added for that category. All seven of
+# these are in Arch's own official repos (core/extra), no BlackArch
+# dependency needed. Headless profile: wireshark-qt swapped for
+# wireshark-cli (tshark) — no GUI on this profile. ---
+nmap
+wireshark-cli
+macchanger
+proxychains-ng
+hashcat
+sleuthkit
+binwalk
 
 # --- Wireless/Bluetooth/malware-analysis essentials (audited against
 # Kali's own tool metapackages 2026-09-18 — Kodachi has no equivalent for

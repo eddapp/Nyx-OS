@@ -36,11 +36,15 @@
 *.img
 *.qcow2
 
-# makepkg artifacts
+# makepkg artifacts, including upstream source tarballs makepkg downloads
+# next to a PKGBUILD (mieru/mita fetch theirs by URL with pinned sha256sums)
 install/pkgbuild/*/pkg/
 install/pkgbuild/*/src/
 install/pkgbuild/*/*.pkg.tar.*
 install/pkgbuild/*/*.log
+install/pkgbuild/*/*.tar.gz
+install/pkgbuild/*/*.tar.xz
+install/pkgbuild/*/*.zip
 
 # JetBrains
 .idea/

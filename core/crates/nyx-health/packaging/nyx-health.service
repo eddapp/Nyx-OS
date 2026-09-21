@@ -10,7 +10,14 @@ ExecStart=/usr/bin/nyx-health
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=nyx
-RuntimeDirectoryMode=0750
+# 0755, not 0750: systemd creates /run/nyx as root:root, so a stricter mode
+# locks wheel users out of sockets that are themselves 0660 root:wheel — the
+# socket mode is the trust boundary, the directory only needs to be
+# traversable. Preserve=yes because all Nyx daemons share this one directory
+# and systemd removes a RuntimeDirectory whenever any unit owning it stops,
+# which would delete every sibling's socket on a single daemon restart.
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

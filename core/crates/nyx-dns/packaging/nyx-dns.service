@@ -10,7 +10,12 @@ ExecStart=/usr/bin/nyx-dns
 Restart=on-failure
 RestartSec=2
 RuntimeDirectory=nyx
-RuntimeDirectoryMode=0750
+# 0755 + Preserve=yes: /run/nyx is shared by every Nyx daemon and created
+# root:root by systemd; 0750 locks wheel users out of the 0660 root:wheel
+# sockets, and without Preserve a single daemon restart removes the whole
+# directory (and every sibling's socket) — see nyx-health.service.
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

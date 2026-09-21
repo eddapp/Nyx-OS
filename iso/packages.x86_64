@@ -122,6 +122,20 @@ pavucontrol
 ttf-dejavu
 noto-fonts
 
+# --- NyxOS look (see install/desktop-theme, shipped by nyx-desktop-sessions
+# and nyx-conky): dark GTK/xfwm4 theme, icon set, and the monospace face the
+# overlay, panel clock and terminal use. Arc is no longer in the official
+# repos, hence Materia. ---
+materia-gtk-theme
+papirus-icon-theme
+ttf-jetbrains-mono
+
+# --- Interactive shell: zsh with the two plugins the system-wide
+# /etc/zsh/zshrc (nyx-desktop-sessions) sources. ---
+zsh
+zsh-autosuggestions
+zsh-syntax-highlighting
+
 # --- Default browser ---
 # Zen (Firefox-based) — no official/BlackArch package, built from the
 # zen-browser-bin AUR PKGBUILD at ISO-build time via
@@ -157,14 +171,24 @@ polkit-gnome
 # --- Rust toolchain for the control layer ---
 rust
 
-# --- BlackArch: anonymity / anti-forensics / crypto tooling ---
-blackarch-anti-forensic
-blackarch-crypto
-blackarch-proxy
-blackarch-spoof
-blackarch-sniffer
-blackarch-networking
-blackarch-forensic
+# --- BlackArch/extra: networking, sniffing, spoofing, proxying, crypto
+# attack, and disk forensics essentials. Named individual tools, not the
+# blackarch-networking/sniffer/spoof/proxy/crypto/forensic/anti-forensic
+# groups (each pulls in hundreds of packages) — same "named tools, not whole
+# groups" reasoning as the wireless/blue-team section below, applied
+# consistently here instead of contradicting it. Matches how Kali's own
+# default/live toolset is curated, not a full category dump. Anti-forensic
+# needs are already covered by wipe/secure-delete/gocryptfs/veracrypt/mat2
+# above, so no separate package is added for that category. All seven of
+# these are in Arch's own official repos (core/extra), no BlackArch
+# dependency needed. ---
+nmap
+wireshark-qt
+macchanger
+proxychains-ng
+hashcat
+sleuthkit
+binwalk
 
 # --- Wireless/Bluetooth/malware-analysis essentials (audited against
 # Kali's own tool metapackages 2026-09-18 — Kodachi has no equivalent for

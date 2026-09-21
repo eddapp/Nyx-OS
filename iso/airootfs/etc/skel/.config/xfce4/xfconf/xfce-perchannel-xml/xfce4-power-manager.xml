@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Live medium only (airootfs, not packaged): no display blanking or DPMS
+     during a live demo. Installed systems keep xfce4-power-manager's own
+     defaults. -->
+<channel name="xfce4-power-manager" version="1.0">
+  <property name="xfce4-power-manager" type="empty">
+    <property name="dpms-enabled" type="bool" value="false"/>
+    <property name="blank-on-ac" type="int" value="0"/>
+    <property name="blank-on-battery" type="int" value="0"/>
+    <property name="lock-screen-suspend-hibernate" type="bool" value="false"/>
+  </property>
+</channel>

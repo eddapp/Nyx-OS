@@ -18,7 +18,7 @@ license=('MIT')
 # status (same socket the dashboard uses). iproute2: local-only
 # route/interface reads. Deliberately no dependency on any daemon needing
 # root beyond what's already required to run those daemons themselves.
-depends=('conky' 'nyx-diagnostics' 'iproute2')
+depends=('conky' 'nyx-diagnostics' 'iproute2' 'ttf-jetbrains-mono')
 
 _repo_root="$startdir/../../.."
 _conky_dir="$_repo_root/install/conky"

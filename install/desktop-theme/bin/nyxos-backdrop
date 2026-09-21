@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Make sure every connected monitor shows the NyxOS backdrop. xfdesktop keys
+# the wallpaper on the monitor's connector name (Virtual-1, eDP-1, HDMI-A-1,
+# ...), which no static default can enumerate for every machine, so this
+# runs once per login for whatever /sys/class/drm reports as connected and
+# only fills in monitors that have no setting yet — a user's own choice is
+# never overwritten.
+wall=/usr/share/backgrounds/nyxos/nyxos-default.png
+[ -f "$wall" ] || exit 0
+command -v xfconf-query >/dev/null || exit 0
+for c in /sys/class/drm/card*-*; do
+    [ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
+    m=$(basename "$c" | sed 's/^card[0-9]*-//')
+    base="/backdrop/screen0/monitor${m}/workspace0"
+    xfconf-query -c xfce4-desktop -p "$base/last-image" >/dev/null 2>&1 && continue
+    xfconf-query -c xfce4-desktop -p "$base/last-image" -n -t string -s "$wall"
+    xfconf-query -c xfce4-desktop -p "$base/image-style" -n -t int -s 5
+done

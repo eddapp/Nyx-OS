@@ -244,7 +244,54 @@ stage_nyx_keyring "$PROFILE_DIR/airootfs"
 stage_nyx_repo_in_airootfs "$LOCAL_REPO_DIR" "$PROFILE_DIR/airootfs"
 install -Dm644 "$PACKAGES_FILE" "$PROFILE_DIR/airootfs/usr/share/nyxos/installer/packages.x86_64"
 
-sudo --preserve-env=SOURCE_DATE_EPOCH mkarchiso -v -C "$BUILD_PACMAN_CONF" -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
+# mkarchiso remembers every step it completed in "$WORK_DIR/build.*" marker
+# files and silently skips those steps on the next run (see _run_once in
+# /usr/bin/mkarchiso). That "resume" behaviour is a trap for a real build:
+# after a failed run it will happily reuse a stale generated pacman.conf,
+# a half-populated airootfs, or an old profile copy, so edits to
+# pacman.conf/airootfs/profiledef.sh never take effect. Always start the
+# image stage from an empty work dir. Packages already downloaded stay in
+# the host's pacman cache, so this costs no re-downloads.
+if [[ -d "$WORK_DIR" ]]; then
+    # A failed or interrupted pacstrap leaves its proc/sys/dev mounts behind
+    # under the work dir (mkarchiso's own cleanup gives up with "target is
+    # busy"). rm --one-file-system then refuses to cross them, exits 1, and
+    # set -e ends this script with no message at all. Detach them first,
+    # deepest mount point first; -l because a host file indexer sitting on
+    # the tree is enough to make a plain umount fail.
+    while IFS= read -r mnt; do
+        sudo umount -l "$mnt"
+    done < <(findmnt -rno TARGET | awk -v w="$WORK_DIR/" 'index($0, w) == 1' | sort -r)
+    sudo rm -rf --one-file-system "$WORK_DIR"
+fi
+
+# --- Purge stale host-cache copies of the packages we just (re)built into
+# $LOCAL_REPO_DIR. pacstrap runs with -c, sharing this build host's own
+# /var/cache/pacman/pkg with the chroot, and pacman validates any cached
+# copy of a package against the checksum recorded in the repo db before
+# reusing it. Our own nyx-*/AUR packages keep the same pkgver-pkgrel across
+# iterative rebuilds during development, but the underlying build isn't
+# reproducible (Rust codegen, timestamps, etc.), so the *content* — and
+# therefore the checksum — differs from one build to the next even though
+# the filename doesn't. A stale cached copy left over from an earlier run
+# then mismatches this run's freshly signed nyxos.db.tar.gz, and pacman
+# aborts the whole transaction with "invalid or corrupted package" instead
+# of just re-copying the current file. Clear exactly the package files this
+# run produced so pacman always pulls fresh from $LOCAL_REPO_DIR.
+for f in "$LOCAL_REPO_DIR"/*.pkg.tar.zst; do
+    [[ -e "$f" ]] || continue
+    sudo rm -f "/var/cache/pacman/pkg/$(basename "$f")" "/var/cache/pacman/pkg/$(basename "$f").sig"
+done
+
+# Private mount namespace: pacstrap mounts proc/sys/dev inside the airootfs
+# and unmounts them when it's done, but anything on the host holding a file
+# open under the work tree (a desktop search indexer, say) makes that umount
+# fail with "target is busy"; mkarchiso's own cleanup then walks a live
+# procfs and dies at the last step before squashfs. Inside a private
+# namespace the host can't see those mounts at all, so nothing can pin them,
+# and they vanish with the namespace even if mkarchiso is interrupted.
+sudo --preserve-env=SOURCE_DATE_EPOCH unshare --mount --propagation private \
+    mkarchiso -v -C "$BUILD_PACMAN_CONF" -w "$WORK_DIR" -o "$OUT_DIR" "$PROFILE_DIR"
 
 # --- Locate the ISO mkarchiso just wrote. Its filename embeds
 # iso_version=$(date +%Y.%m.%d) from profiledef.sh, evaluated at mkarchiso's
