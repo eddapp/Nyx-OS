@@ -30,7 +30,7 @@ What works today (verified on real builds, UEFI and BIOS):
 * ✅ Installer to disk via `nyx-install` (wraps Arch's `archinstall`) with the same packages and configuration as the live system
 * ✅ Signed packages, signed repo database, signed build manifest, and a signed [warrant canary](CANARY.md) on every image
 
-See the [🗺️ Roadmap](#️-roadmap) for what's still open.
+See the Roadmap section at the end for what's still open.
 
 ---
 
@@ -70,7 +70,7 @@ iso/build.sh --profile server   # headless control-layer ISO, no GUI packages
 iso/build.sh --clean            # wipe iso/work, iso/out and the local package repo first
 ```
 
-What `build.sh` does for you, in order: builds every `nyx-*` package from this repo with `makepkg`, builds the few AUR-only packages (Zen browser, oniux, Session, mieru/mita, AmneziaWG, …), signs everything with a per-host build key it generates on first run, stages the signed `[nyxos]` repo onto the medium, then runs `mkarchiso` in a private mount namespace and writes a signed build manifest next to the ISO. Re-runs are much faster — already-built AUR packages are skipped and downloaded packages stay in the host's pacman cache.
+What `build.sh` does for you, in order: builds every `nyx-*` package from this repo with `makepkg`, builds the few AUR-only packages (Zen browser, AmneziaWG, Hysteria, Cloak, oniux, Session), signs everything with a per-host build key it generates on first run, stages the signed `[nyxos]` repo onto the medium, then runs `mkarchiso` in a private mount namespace and writes a signed build manifest next to the ISO. Re-runs are much faster — already-built AUR packages are skipped and downloaded packages stay in the host's pacman cache.
 
 **Other Linux distributions (Debian, Fedora, Ubuntu, …):** `mkarchiso` needs a real pacman/Arch userland. Build in an Arch VM exactly as described for Windows/macOS below. (A privileged `archlinux` Docker container can work for experienced users, but it is not a supported path.)
 
@@ -95,7 +95,7 @@ Same rule — build inside an Arch VM:
 ```bash
 diskutil list                       # find the USB stick, e.g. /dev/disk4
 diskutil unmountDisk /dev/disk4
-sudo dd if=nyxos-2026.09.21-x86_64.iso of=/dev/rdisk4 bs=4m status=progress
+sudo dd if=nyxos-2026.09.21-x86_64.iso of=/dev/rdisk4 bs=4m
 ```
 
 ### 🧪 Test the ISO in a VM before touching a USB stick
@@ -130,7 +130,7 @@ At the boot menu you choose a **tier**:
 | Entry | What it does |
 | --- | --- |
 | **Live** | Everything in RAM, nothing touches your disks |
-| **Live (safe graphics)** | Same, with fallback video for awkward GPUs |
+| **Live (safe graphics)** | Same with `nomodeset` for awkward GPUs (BIOS boot menu only) |
 | **Persistent** | Overlays a partition labelled `NYXOS_PERSIST` on the stick (Kali-style persistence) |
 | **Encrypted Persistence** | Same, from a LUKS partition labelled `NYXOS_PERSIST_ENC` |
 | **Forensics: RAM-only** | Copies the system to RAM and never auto-mounts anything |
@@ -138,7 +138,7 @@ At the boot menu you choose a **tier**:
 
 ### 🖥️ The live session
 
-* Logs straight into the XFCE desktop as user **`nyx`** (password `nyxos`, only ever needed to unlock the screen — the live session never idle-locks)
+* Logs straight into the XFCE desktop as user **`nyx`**. The password is `nyxos`; you only need it if you lock the screen or log out, since the live session never idle-locks and autologin happens only at boot
 * `sudo` is passwordless on the live medium only
 * The right-hand overlay shows real daemon state — Tor, kill switch, VPN, DNS, IPv6 — read from the Nyx daemons, not guessed from process names
 * **Nyx Dashboard** (first launcher on the panel) is the control panel for Tor, VPN, DNS, kill switch, posture profiles, periodic tasks and the panic room
@@ -233,7 +233,7 @@ The system-wide enforcement concept: privacy-sensitive traffic must not silently
 User ─▶ NyxOS ─▶ Firewall ─▶ VPN ─▶ Tor ─▶ DNS ─▶ Internet
 ```
 
-If a required link fails, NyxOS transitions into a defined safe state instead of routing around it. Modes: `DIRECT`, `VPN`, `TOR`, `VPN → TOR`, `TOR → VPN`, `ISOLATED`. Each mode defines routing, firewall and DNS policy, permitted interfaces, failure behavior and verification requirements.
+If a required link fails, NyxOS transitions into a defined safe state instead of routing around it. Today that is the kill switch, the Standard / Medium / Paranoid posture profiles and VPN-over-Tor / Tor-over-VPN chaining in `nyx-health` and `nyx-vpn`; the design target is a full set of named modes — `DIRECT`, `VPN`, `TOR`, `VPN → TOR`, `TOR → VPN`, `ISOLATED` — each defining routing, firewall and DNS policy, permitted interfaces, failure behavior and verification requirements.
 
 ---
 
